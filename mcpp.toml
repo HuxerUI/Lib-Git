@@ -1,0 +1,25 @@
+[package]
+namespace = "huxerui"
+name = "git"
+version = "0.1.0"
+standard = "c++23"
+description = "Repository inspection and Git operations for HuxerUI"
+
+[package.metadata.huxerui]
+library = "HuxerUI::Git"
+namespace = "huxerui::git"
+id = "org.huxerui.lib.git"
+resources = "resources"
+
+[dependencies]
+huxerui = { path = "../HuxerUI" }
+
+[targets.git]
+kind = "lib"
+
+[lib]
+path = "modules/git.cppm"
+
+[build]
+sources = []
+include_dirs = ["include"]

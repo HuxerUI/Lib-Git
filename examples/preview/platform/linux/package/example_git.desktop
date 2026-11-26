@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Git Preview
+Exec=example_git
+Icon=example_git
+Categories=Utility;
+Terminal=false

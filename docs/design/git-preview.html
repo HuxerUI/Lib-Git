@@ -1,0 +1,1097 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lib-Git Desktop Design</title>
+<style>
+:root {
+  color-scheme: light;
+  --desk:#e9edf3; --chrome:#f7f8fb; --surface:#fff; --wash:#f8fafc; --line:#e1e6ee;
+  --ink:#17243a; --soft:#46546b; --muted:#5c6a81; --blue:#2455d6; --blue-dark:#1c46b8;
+  --selected:#e9f0ff; --green:#186541; --green-bg:#e8f7ef; --red:#9a323a; --red-bg:#fcecef;
+  --orange:#86510b; --orange-bg:#fff2d7; --violet:#794cb0; --teal:#177e78;
+  --ui:"Inter","SF Pro Text",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  --mono:"SFMono-Regular","Cascadia Code",Consolas,monospace;
+}
+* {box-sizing:border-box}
+body {margin:0;min-width:310px;color:var(--ink);background:var(--desk);font:13px/1.35 var(--ui);font-variant-numeric:tabular-nums}
+button,input,textarea {font:inherit;color:inherit}
+button {background:none;border:0;cursor:pointer}
+button:focus-visible,input:focus-visible,textarea:focus-visible,[tabindex]:focus-visible {outline:2px solid var(--blue);outline-offset:2px}
+button:disabled {opacity:.43;cursor:default}
+[hidden] {display:none!important}
+h1,h2,p {margin:0}
+h1 {font-size:25px;line-height:1.12;letter-spacing:-.035em;font-weight:730}
+h2 {font-size:15px;letter-spacing:-.014em}
+code,kbd,.mono {font-family:var(--mono)}
+kbd {color:var(--muted);border:1px solid #dce3ed;border-radius:4px;background:var(--surface);padding:1px 4px;font-size:10px;white-space:nowrap}
+.icon {width:16px;height:16px;flex:none;display:inline-block;vertical-align:middle;color:inherit}
+.button {display:inline-flex;align-items:center;justify-content:center;gap:7px;white-space:nowrap;height:32px;padding:0 11px;border:1px solid #d9e1eb;border-radius:7px;background:var(--surface);font-weight:625;font-size:12px}
+.button:hover:not(:disabled) {border-color:#b9c9e5;background:#f5f8ff}
+.primary {background:var(--blue);color:white;border-color:var(--blue);box-shadow:0 1px 2px #18386724}
+.primary:hover:not(:disabled) {background:var(--blue-dark);border-color:var(--blue-dark)}
+.ghost {border-color:transparent;background:transparent}
+.icon-button {display:inline-grid;place-items:center;width:29px;height:29px;border-radius:6px;color:var(--muted);flex:none}
+.icon-button:hover {background:#e8edf6;color:var(--ink)}
+.chip {display:inline-flex;align-items:center;gap:4px;padding:2px 6px;border-radius:5px;background:#edf1f7;color:var(--soft);white-space:nowrap;font-size:10px;font-weight:680}
+.chip.blue {background:var(--selected);color:var(--blue-dark)}
+.chip.green {background:var(--green-bg);color:var(--green)}
+.chip.orange {background:var(--orange-bg);color:var(--orange)}
+.chip.purple {background:#f2ebfb;color:#684094}
+.truncate {overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.subtle {color:var(--muted)}
+.desktop {margin:30px auto;width:min(1370px,calc(100% - 64px));height:calc(100dvh - 60px);min-height:770px;background:var(--surface);border:1px solid #cdd6e3;border-radius:14px;overflow:hidden;display:grid;grid-template-rows:50px auto minmax(0,1fr) 30px;box-shadow:0 20px 55px #293d5c19,0 2px 6px #293d5c10}
+.tabs {display:flex;align-items:center;gap:9px;min-width:0;padding:0 13px;background:var(--chrome);border-bottom:1px solid var(--line)}
+.brand {display:flex;align-items:center;gap:8px;font-size:15px;font-weight:760;letter-spacing:-.035em;margin:0 5px 0 1px;white-space:nowrap}
+.mark {display:grid;place-items:center;width:28px;height:28px;border-radius:8px;background:#e6edff;color:var(--blue);flex:none}
+.mark .icon {width:18px;height:18px}
+.repo-tabs {display:flex;align-items:center;gap:4px;min-width:0}
+.tab {display:flex;align-items:center;gap:7px;max-width:178px;height:32px;padding:0 8px 0 9px;border:1px solid transparent;border-radius:7px;color:var(--soft);font-weight:655;white-space:nowrap}
+.tab.active {background:var(--surface);border-color:#d8e0ed;color:var(--ink);box-shadow:0 1px 2px #293d5c0a}
+.tab .icon:first-child {color:var(--blue)}
+.tab-close {margin-left:1px;width:17px;height:17px;display:grid;place-items:center;border-radius:3px;color:var(--muted)}
+.tab-close:hover {background:var(--selected);color:var(--blue)}
+.tab-close .icon {width:13px;height:13px}
+.flex-space {flex:1;min-width:0}
+.toolbar {min-width:0;display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--surface)}
+.toolbar-name {display:flex;align-items:center;gap:10px;min-width:0}
+.repo-icon {display:grid;place-items:center;width:36px;height:36px;border:1px solid #dce5f5;border-radius:8px;background:#f0f5ff;color:var(--blue);flex:none}
+.repo-icon .icon {width:19px;height:19px}
+.repo-name {font-size:15px;font-weight:710;letter-spacing:-.015em}
+.repo-path {color:var(--muted);font-size:11px;margin-top:2px}
+.tracking {display:flex;align-items:center;gap:7px;margin-left:9px;padding-left:15px;min-height:30px;border-left:1px solid var(--line);white-space:nowrap;font-size:12px}
+.tracking .icon {color:var(--muted);width:14px;height:14px}
+.tracking .target {color:var(--muted)}
+.sync-count {display:inline-flex;gap:6px;color:var(--blue-dark);font-size:11px;font-weight:680}
+.actions {display:flex;gap:6px;align-items:center}
+.workspace {display:grid;grid-template-columns:220px minmax(0,1fr);min-height:0}
+.sidebar {background:var(--wash);border-right:1px solid var(--line);padding:12px 10px 9px;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:13px}
+.nav {display:grid;gap:3px}
+.nav button,.ref-row,.small-link {min-width:0;display:flex;align-items:center;text-align:left;gap:7px;width:100%;min-height:30px;padding:0 8px;border-radius:6px;white-space:nowrap}
+.nav button .label,.ref-row .label {flex:1}
+.nav button {font-weight:630}
+.nav button:hover,.ref-row:hover,.small-link:hover {background:#edf2f9}
+.nav button.active {color:var(--blue-dark);background:var(--selected)}
+.nav button .icon,.ref-row .icon,.small-link .icon {color:var(--muted)}
+.nav button.active .icon {color:var(--blue)}
+.group-title {display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.074em;font-weight:720;padding:0 8px 4px}
+.group-title .icon-button {width:21px;height:21px}
+.ref-row {font-size:12px;min-height:28px;position:relative;padding-right:5px}
+.ref-row.active {background:var(--selected);color:var(--blue-dark)}
+.ref-row.current .label {font-weight:700}
+.ref-body {padding:0;display:flex;min-width:0;flex:1;align-items:center;gap:7px;text-align:left;height:28px}
+.ref-menu {width:22px;height:22px;opacity:0}
+.ref-row:hover .ref-menu,.ref-row:focus-within .ref-menu,.ref-row.menu-source .ref-menu {opacity:1}
+.ref-row.menu-source {box-shadow:inset 0 0 0 1px #b7c9f3;background:#edf3ff}
+.sidebar-footer {margin-top:auto;border-top:1px solid var(--line);padding-top:7px}
+.small-link {color:var(--soft);font-size:11.5px}
+.content {min-width:0;min-height:0;overflow:hidden}
+.page {width:100%;height:100%;min-width:0;min-height:0}
+.history {display:grid;grid-template-rows:50px minmax(237px,1fr) 8px minmax(240px,.99fr)}
+.page-head {display:flex;align-items:center;gap:10px;padding:0 16px;min-height:50px;border-bottom:1px solid var(--line)}
+.scope {display:flex;gap:5px;align-items:center;color:var(--soft);font-size:11.5px}
+.scope .icon {width:13px;height:13px}
+.search {height:30px;display:flex;align-items:center;gap:7px;border:1px solid #dce3ed;border-radius:7px;background:var(--wash);padding:0 7px;color:var(--muted)}
+.search input {min-width:0;width:111px;border:0;background:transparent;outline:0;color:var(--ink);font-size:11.5px}
+.search .icon {width:14px;height:14px}
+.table-wrap {display:grid;grid-template-rows:28px minmax(0,1fr);min-height:0}
+.table-head,.commit-row {min-width:0;display:grid;grid-template-columns:84px minmax(0,1fr) 111px 84px 75px;align-items:center;text-align:left;padding:0 10px 0 5px}
+.table-head {background:var(--wash);color:var(--muted);font-size:10.5px;font-weight:690;border-bottom:1px solid var(--line)}
+.table-head span:first-child {padding-left:9px}
+.table-body {overflow:auto;position:relative;min-height:0}
+.commit-row {grid-template-columns:84px minmax(0,1fr) 111px 84px 75px;height:33px;width:100%;font-size:12px;border-bottom:1px solid #f0f3f7}
+.commit-row:nth-of-type(even) {background:#fbfcfe}
+.commit-row:hover {background:#f0f5ff}
+.commit-row.active {background:var(--selected);box-shadow:inset 3px 0 var(--blue)}
+.commit-row.active .subject {font-weight:700}
+.commit-cells {display:flex;align-items:center;gap:6px;min-width:0}
+.commit-row .short-hash {font-size:11px;color:var(--muted)}
+.graph {pointer-events:none;position:absolute;z-index:1;top:0;left:7px;width:70px}
+.resize {display:grid;place-items:center;background:#f0f3f8;border-top:1px solid #dfe6ef;border-bottom:1px solid #dfe6ef;cursor:ns-resize;touch-action:none}
+.resize span {width:26px;border-top:2px solid #aab7ca;border-radius:3px}
+.review {min-width:0;min-height:0;display:grid;grid-template-columns:292px minmax(0,1fr)}
+.commit-details {border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:auto;min-height:0}
+.detail-top {padding:13px 13px 10px}
+.detail-top h2 {font-size:17px;font-weight:710;margin-bottom:9px;letter-spacing:-.024em}
+.meta-row {display:flex;align-items:center;gap:5px;margin-bottom:8px;color:var(--muted);font-size:11.5px;white-space:nowrap}
+.meta-row .icon-button {width:21px;height:23px}
+.avatar {display:inline-grid;place-items:center;width:25px;height:25px;border-radius:50%;color:#2e4d95;background:#e4edff;font-size:10px;font-weight:740;flex:none}
+.author-name {color:var(--ink);font-weight:635}
+.parent-row {display:flex;align-items:center;gap:6px;flex-wrap:wrap;color:var(--muted);font-size:11px}
+.parent-row .button {height:22px;font-size:10.5px;padding:0 6px}
+.parent-row .button.active {border-color:#bed0fc;color:var(--blue-dark);background:var(--selected)}
+.files-head {display:flex;align-items:center;justify-content:space-between;padding:7px 13px;background:var(--wash);border-block:1px solid var(--line);font-size:11px;font-weight:675}
+.file-line {width:100%;display:flex;align-items:center;gap:7px;min-height:29px;padding:0 10px;border-radius:5px;text-align:left;white-space:nowrap;font-size:11.5px}
+.file-line:hover {background:#f1f5fc}
+.file-line.active {background:var(--selected);color:var(--blue-dark);font-weight:650}
+.file-list {padding:5px 6px}
+.file-line .file-name {flex:1}
+.flag {display:inline-grid;place-items:center;width:17px;height:17px;border-radius:4px;background:var(--orange-bg);color:var(--orange);font:700 10px var(--mono);flex:none}
+.flag.add {background:var(--green-bg);color:var(--green)}
+.flag.new {background:#eaf0fd;color:var(--blue-dark)}
+.flag.conflict {background:var(--red-bg);color:var(--red)}
+.diff {min-width:0;min-height:0;display:grid;grid-template-rows:auto minmax(0,1fr) auto}
+.diff-head {display:flex;gap:8px;align-items:center;min-height:42px;padding:0 11px;border-bottom:1px solid var(--line)}
+.diff-head .path {display:flex;align-items:center;min-width:0;gap:8px;font-size:12px;font-weight:650}
+.diff-head .path .icon {color:var(--muted)}
+.segment {display:flex;gap:2px;padding:2px;background:#edf1f7;border:1px solid #e4eaf3;border-radius:7px}
+.segment button {min-width:48px;padding:3px 8px;font-size:10.5px;color:var(--soft);font-weight:650;border:1px solid transparent;border-radius:5px}
+.segment button.active {background:var(--surface);color:var(--blue-dark);border-color:#d8e1f0;box-shadow:0 1px 2px #293d5c11}
+.patch {min-width:0;min-height:0;overflow:auto;font:11.5px/1.3 var(--mono);color:#283752}
+.hunk {display:flex;align-items:center;gap:10px;min-height:26px;background:#eef3ff;color:#315491;padding:0 10px;border-bottom:1px solid #e3eafe;white-space:nowrap}
+.hunk .button {margin-left:auto;height:20px;font:680 10.5px var(--ui);padding:0 7px}
+.code-row {display:grid;grid-template-columns:31px 31px 23px minmax(max-content,1fr);align-items:center;min-height:23px;white-space:pre;min-width:100%;width:max-content;padding-right:12px}
+.code-row.added,.split-cell.added {background:var(--green-bg);color:var(--green)}
+.code-row.removed,.split-cell.removed {background:var(--red-bg);color:var(--red)}
+.code-row[role=button],.split-cell[role=button] {cursor:pointer}
+.code-row.selected,.split-cell.selected {box-shadow:inset 3px 0 var(--blue);background:#dce9ff;color:#163e9c}
+.num {color:#5e6f87;text-align:right;padding-right:7px;user-select:none;font-size:10px}
+.sign {text-align:center;user-select:none}
+.keyword {color:#7140ac;font-weight:630}
+.string {color:#326649}
+.added .keyword,.removed .keyword {color:inherit}
+.patch-footer {display:flex;align-items:center;justify-content:space-between;gap:7px;border-top:1px solid var(--line);padding:6px 11px;background:var(--wash);color:var(--muted);font-size:11px}
+.patch-footer:empty {display:none}
+.patch-footer .button {height:25px;font-size:11px}
+.change-page {display:grid;grid-template-columns:312px minmax(0,1fr)}
+.changes-side {border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0;min-height:0;overflow:auto}
+.changes-side .page-head {justify-content:space-between}
+.file-group {padding:9px 8px 11px;border-bottom:1px solid var(--line)}
+.file-group .group-line {display:flex;align-items:center;justify-content:space-between;gap:4px;margin:0 4px 4px;font-weight:685;font-size:12px}
+.file-group .button {height:23px;font-size:10.5px;padding:0 7px}
+.file-group .file-line {height:36px}
+.file-caption {display:block;font-size:10px;font-weight:450;color:var(--muted)}
+.file-count {color:var(--muted);font-size:10px;font-family:var(--mono);margin-left:auto}
+.composer {margin-top:auto;padding:12px;background:var(--wash);border-top:1px solid var(--line);display:grid;gap:8px}
+.composer-title {display:flex;align-items:center;justify-content:space-between}
+.composer textarea {min-height:68px;resize:vertical;width:100%;border:1px solid #dbe3ee;border-radius:7px;padding:8px;background:var(--surface);font-size:12px}
+.composer .actions {justify-content:space-between}
+.split-row {display:grid;grid-template-columns:1fr 1fr}
+.split-cell {display:grid;min-width:0;grid-template-columns:33px 18px minmax(0,1fr);align-items:center;min-height:23px;white-space:pre}
+.split-cell+ .split-cell {border-left:1px solid #dce4ef}
+.split-cell .text {overflow:hidden;text-overflow:ellipsis}
+.split-cell.blank {background:#f4f6fa}
+.split-label {display:grid;grid-template-columns:1fr 1fr;position:sticky;top:0;z-index:2;background:var(--surface);border-bottom:1px solid var(--line);color:var(--muted);font:650 11px var(--ui)}
+.split-label span {padding:6px 11px}
+.split-label span+span {border-left:1px solid var(--line)}
+.conflict-page {display:grid;grid-template-rows:auto minmax(0,1fr)}
+.conflict-banner {display:flex;align-items:center;gap:8px;padding:11px 14px;background:#fff7e8;border-bottom:1px solid #f0e2cb;color:var(--orange)}
+.conflict-banner strong {color:#6a430d}
+.conflict-body {display:grid;grid-template-columns:265px minmax(0,1fr);min-height:0}
+.conflict-files {border-right:1px solid var(--line);display:flex;flex-direction:column;padding:12px 8px;min-height:0}
+.conflict-files .actions {margin-top:auto;padding:9px 3px 0}
+.conflict-editor {display:grid;grid-template-rows:auto minmax(0,1fr) minmax(0,1fr) auto;min-height:0}
+.conflict-sides {display:grid;grid-template-columns:1fr 1fr;min-height:0}
+.conflict-side {overflow:auto;min-width:0}
+.conflict-side+ .conflict-side {border-left:1px solid var(--line)}
+.conflict-side header {display:flex;align-items:center;justify-content:space-between;gap:5px;padding:8px 11px;background:var(--wash);border-bottom:1px solid var(--line);font-weight:670}
+.conflict-side code {display:block;padding:8px 11px;font-size:12px;white-space:pre-wrap}
+.conflict-line {display:block;background:var(--orange-bg);color:var(--orange);padding:4px;margin:2px -4px}
+.result-editor {display:grid;grid-template-rows:auto minmax(0,1fr);border-top:1px solid var(--line)}
+.result-editor label {padding:8px 11px;font-weight:680;background:var(--wash);border-bottom:1px solid var(--line)}
+.result-editor textarea {border:0;resize:none;width:100%;height:100%;padding:12px;font:12px/1.5 var(--mono);background:var(--surface)}
+.footer {display:flex;align-items:center;gap:10px;border-top:1px solid var(--line);background:var(--chrome);color:var(--muted);padding:0 12px;font-size:11px;white-space:nowrap}
+.footer .status-mark {display:inline-block;width:6px;height:6px;background:#348467;border-radius:50%;margin-right:2px}
+.footer-message {color:var(--ink)}
+.footer button {color:var(--blue-dark);font-size:11px;padding:0}
+.welcome {grid-column:1/-1;overflow:auto;background:#f6f8fc;display:grid;align-content:start;justify-items:center;padding:65px 20px 32px}
+.welcome-main {width:min(620px,100%)}
+.welcome-opening {display:flex;align-items:center;gap:12px;margin-bottom:20px}
+.welcome-opening .mark {width:43px;height:43px;border-radius:11px}
+.welcome-opening .icon {width:24px;height:24px}
+.welcome-opening h1 {font-size:28px}
+.welcome-actions {display:flex;align-items:center;gap:7px;margin-bottom:19px}
+.welcome-actions .button {height:35px}
+.recents {border:1px solid #dae2ee;border-radius:10px;background:var(--surface);overflow:hidden}
+.recents h2 {padding:12px 13px;border-bottom:1px solid var(--line);font-size:13.5px;background:#fbfcff}
+.recent-row {display:flex;align-items:center;gap:10px;padding:11px 13px;border-bottom:1px solid #e9edf4}
+.recent-row:last-child {border-bottom:0}
+.recent-row .location {flex:1;min-width:0}
+.recent-row .repo-icon {width:32px;height:32px}
+.recent-row h3 {font-size:13px;margin:0 0 2px}
+.recent-row p {color:var(--muted);font-size:11px}
+.welcome-footer {display:flex;justify-content:space-between;gap:9px;align-items:center;margin-top:13px}
+.welcome-footer button {padding:0;color:var(--blue-dark);font-size:12px}
+.branch-menu {border:1px solid #d8e1ec;background:white;border-radius:9px;padding:5px;position:fixed;z-index:10;min-width:238px;box-shadow:0 10px 24px #273b5b26,0 1px 4px #273b5b16}
+.menu-title {padding:5px 7px 6px;font-size:11px;font-weight:680;color:var(--soft)}
+.branch-menu button {display:flex;align-items:center;gap:8px;text-align:left;width:100%;padding:0 7px;height:29px;border-radius:5px;font-size:12px}
+.branch-menu button:hover,.branch-menu button:focus-visible {background:var(--selected);outline:0}
+.branch-menu button.danger {color:var(--red)}
+.branch-menu button .icon {width:14px;height:14px}
+.menu-separator {height:1px;background:var(--line);margin:3px 2px}
+dialog {width:min(425px,calc(100vw - 32px));padding:0;border:1px solid #ccd9ea;border-radius:12px;color:var(--ink);box-shadow:0 20px 60px #263e5d44}
+dialog::backdrop {background:#14253c48}
+.dialog-main {padding:17px}
+.dialog-main h2 {font-size:18px;margin-bottom:8px}
+.dialog-main p {color:var(--soft);margin:5px 0 11px}
+.dialog-main dl {margin:0 0 10px;background:var(--wash);padding:8px 10px;border:1px solid var(--line);border-radius:6px;display:grid;grid-template-columns:78px 1fr;gap:5px;font-size:12px}
+.dialog-main dt {color:var(--muted)}
+.dialog-main dd {margin:0;overflow-wrap:anywhere}
+.dialog-main label {display:block;font-weight:650;margin-bottom:4px}
+.dialog-main input {width:100%;border:1px solid #d9e1ed;border-radius:6px;padding:7px 8px}
+.dialog-actions {display:flex;justify-content:flex-end;gap:6px;padding:9px 12px;border-top:1px solid var(--line);background:var(--wash)}
+.desktop.show-welcome {grid-template-rows:50px minmax(0,1fr) 30px}
+.desktop.show-welcome .workspace {grid-template-columns:1fr}
+@media (max-width:1120px) {
+  .desktop {width:calc(100% - 28px);margin:14px auto;height:calc(100dvh - 28px);min-height:690px}
+  .workspace {grid-template-columns:183px minmax(0,1fr)}
+  .tracking {margin-left:0;padding-left:8px}
+  .table-head,.commit-row {grid-template-columns:68px minmax(0,1fr) 86px 64px 60px}
+  .review {grid-template-columns:240px minmax(0,1fr)}
+  .change-page {grid-template-columns:245px minmax(0,1fr)}
+  .conflict-body {grid-template-columns:205px minmax(0,1fr)}
+}
+@media (max-width:780px) {
+  .desktop {margin:0;width:100%;min-height:760px;border-radius:0}
+  .tracking .target,.tracking .link-arrow,.repo-path,.table-date,.top-open kbd {display:none}
+  .workspace {grid-template-columns:138px minmax(0,1fr)}
+  .sidebar {padding-inline:5px}
+  .table-head,.commit-row {grid-template-columns:60px minmax(0,1fr) 73px 61px}
+  .review {grid-template-columns:175px minmax(0,1fr)}
+  .change-page {grid-template-columns:181px minmax(0,1fr)}
+  .wide-label {display:none}
+}
+@media (max-width:580px) {
+  .toolbar {padding-inline:7px;gap:4px}
+  .toolbar .button {padding-inline:5px}
+  .workspace {grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}
+  .sidebar {display:block;border-right:0;padding:4px;background:#f6f8fc;border-bottom:1px solid var(--line)}
+  .sidebar .nav {display:flex}
+  .sidebar .group,.sidebar-footer {display:none}
+  .desktop.show-welcome .workspace {grid-template-rows:minmax(0,1fr)}
+  .welcome {padding-top:36px}
+  .review {grid-template-columns:135px minmax(0,1fr)}
+  .change-page {grid-template-columns:142px minmax(0,1fr)}
+  .conflict-body {grid-template-columns:135px minmax(0,1fr)}
+  .search input {width:68px}
+  .tracking {display:none}
+  .composer .button {padding-inline:3px;font-size:10px}
+  .repo-tabs .tab:nth-child(2) {display:none}
+}
+</style>
+</head>
+<body>
+<main class="desktop" id="desktop" aria-label="Lib-Git desktop design">
+  <header class="tabs" id="tabs"></header>
+  <div class="toolbar" id="toolbar"></div>
+  <div class="workspace">
+    <aside class="sidebar" id="sidebar" aria-label="Repository navigation"></aside>
+    <section class="content" id="content" aria-label="Repository workspace"></section>
+    <section class="welcome" id="welcome" hidden aria-label="Open a repository"></section>
+  </div>
+  <footer class="footer" id="footer"></footer>
+</main>
+<div class="branch-menu" id="menu" role="menu" hidden></div>
+<dialog id="dialog" aria-labelledby="dialog-heading"></dialog>
+<script>
+"use strict";
+
+const q = (selector, parent = document) => parent.querySelector(selector);
+const icons = {
+  logo: "M7 4v14m0-7c0-3 2-4 5-4h4M7 4a2 2 0 1 0 0 .01M7 18a2 2 0 1 0 0 .01M18 7a2 2 0 1 0 0 .01",
+  repo: "M5 4h12v15H7a2 2 0 0 1-2-2V4zm0 12h12m-9-9h6m-6 3h4",
+  folder: "M3 7V5h6l2 2h10v12H3z",
+  clone: "M12 3v12m-4-4 4 4 4-4m-12 5v4h16v-4",
+  plus: "M12 5v14M5 12h14",
+  close: "m6 6 12 12M18 6 6 18",
+  search: "M16 10a6 6 0 1 0-12 0 6 6 0 0 0 12 0zm-2 4 6 6",
+  branch: "M7 6v12m0-7c0-2 1-3 4-3h5M7 6a2 2 0 1 0 0 .01M7 18a2 2 0 1 0 0 .01M18 8a2 2 0 1 0 0 .01",
+  remote: "M7 17h11a4 4 0 0 0 0-8h-1a5 5 0 0 0-9-2A5 5 0 0 0 7 17z",
+  history: "M4 11a8 8 0 1 1 2 6M4 6v5h5m3-4v5l3 2",
+  file: "M6 3h8l4 4v14H6zm8 0v5h4m-9 4h6m-6 4h6",
+  changes: "M7 5h11v15H7zM4 8v11m6-9h5m-5 3h5m-5 3h3",
+  alert: "M12 3 2.7 20h18.6L12 3zm0 6v4m0 3v.1",
+  tag: "M3 5h9l8 8-7 7-9-9zm5 3v.1",
+  stash: "M4 8h16v12H4zm-1-4h18v4H3zm6 8h6",
+  settings: "M4 6h16M4 12h16M4 18h16M8 4v4m8 2v4m-7 2v4",
+  refresh: "M19 11a7 7 0 0 0-12-5L4 9m0-5v5h5m-4 4a7 7 0 0 0 12 5l3-3m0 5v-5h-5",
+  down: "M12 4v15m-5-5 5 5 5-5",
+  up: "M12 20V5m-5 5 5-5 5 5",
+  pull: "M7 5v13m-3-3 3 3 3-3m7-9v3a3 3 0 0 1-3 3h-3m6-6 2 2m-2-2-2 2",
+  more: "M5 12v.1m7-.1v.1m7-.1v.1",
+  arrow: "M4 12h15m-5-5 5 5-5 5",
+  chevron: "m6 9 6 6 6-6",
+  check: "m5 12 4 4L19 6",
+  copy: "M9 9h11v11H9zm5 0V4H4v11h5",
+  edit: "m5 16 10-10 3 3L8 19H5zm8-8 3 3",
+  trash: "M4 6h16M8 6V4h8v2m2 0-1 14H7L6 6m4 4v6m4-6v6",
+  merge: "M6 5v14m0-5h7a4 4 0 0 0 4-4V5M6 5v.1M6 19v.1M17 5v.1",
+  list: "M8 5h12M8 12h12M8 19h12M4 5v.1M4 12v.1M4 19v.1",
+  external: "M12 5h7v7m0-7-9 9m6-1v6H5V8h6",
+  link: "m10 13 4-4m-7 6-2 2a3 3 0 0 0 4 4l4-4a3 3 0 0 0 0-4m4-4 2-2a3 3 0 0 0-4-4l-4 4a3 3 0 0 0 0 4"
+};
+
+const commits = [
+  ["8f3ac71","Merge audit context into main","Mina Chen","Nov 25","main","",0],
+  ["3d2b9e4","Add request context to audit events","Aria Patel","Nov 25","feature/audit-context","purple",1],
+  ["d51694b","Guard retries when deploy is interrupted","Aria Patel","Nov 24","","",1],
+  ["f42b8c0","Keep deployment health checks bounded","Sam Rivera","Nov 24","origin/main","blue",0],
+  ["7cc12ae","Tag deployment API v2.8.0","Mina Chen","Nov 23","v2.8.0","green",0],
+  ["b4d92f1","Update migration notes for 2.8","Leo Park","Nov 22","release/2.8","green",2],
+  ["1415f2a","Preserve deployment identifiers across retries","Sam Rivera","Nov 22","","",0],
+  ["4d8a20e","Extract deployment result formatter","Mina Chen","Nov 21","","",0]
+];
+
+const branches = {
+  local: ["main","feature/audit-context","release/2.8","fix/retry-window"],
+  remote: ["origin/main","origin/release/2.8"]
+};
+
+const repos = [
+  {name:"atlas-platform", path:"~/Projects/atlas/atlas-platform", note:"Today, 10:24"},
+  {name:"atlas-tools", path:"~/Projects/atlas/atlas-tools", note:"Yesterday"},
+  {name:"release-archive", path:"External volume unavailable", note:"Locate…", missing:true}
+];
+
+const reviewFiles = [
+  {name:"reconcile.ts", path:"src/deployments/reconcile.ts", flag:"M", delta:"+4 −2"},
+  {name:"audit-context.ts", path:"src/audit/audit-context.ts", flag:"A", delta:"+18"},
+  {name:"audit.md", path:"docs/audit.md", flag:"M", delta:"+6 −1"}
+];
+
+const initial = new URLSearchParams(location.search).get("screen");
+const state = {
+  screen:["history","changes","welcome","conflicts","branch"].includes(initial) ? initial : "history",
+  repository:0,
+  tabs:[0,1],
+  commit:0,
+  file:0,
+  branch:"All refs",
+  parent:0,
+  split:false,
+  selections:new Set(["1:2","1:3"]),
+  changedFile:"reconcile.ts",
+  changeGroup:"working",
+  reviewed:false,
+  message:"Handle missing deployments",
+  operation:initial === "conflicts" ? "Merge" : "",
+  conflictCount:2,
+  conflictFile:"reconcile.ts",
+  resolution:"",
+  notice:"",
+  menuOwner:null,
+  dialogOwner:null,
+  revisionText:""
+};
+
+const main = q("#desktop");
+const sidebar = q("#sidebar");
+const content = q("#content");
+const menu = q("#menu");
+const dialog = q("#dialog");
+const welcome = q("#welcome");
+const status = q("#footer");
+
+function icon(name) {
+  return `<canvas class="icon" aria-hidden="true" width="48" height="48" data-icon="${name}"></canvas>`;
+}
+
+function button(label, action, picture = "", extra = "", options = "") {
+  return `<button class="button ${extra}" data-action="${action}" ${options}>${picture ? icon(picture) : ""}${label}</button>`;
+}
+
+function iconButton(label, action, picture, extra = "", options = "") {
+  return `<button class="icon-button ${extra}" data-action="${action}" aria-label="${label}" title="${label}" ${options}>${icon(picture)}</button>`;
+}
+
+function chip(text, type = "") {
+  return `<span class="chip ${type}">${text}</span>`;
+}
+
+function drawIcons(root = document) {
+  root.querySelectorAll("canvas[data-icon]").forEach((canvas) => {
+    const pen = canvas.getContext("2d");
+    pen.setTransform(2, 0, 0, 2, 0, 0);
+    pen.clearRect(0, 0, 24, 24);
+    pen.lineWidth = canvas.dataset.icon === "more" ? 2.9 : 1.65;
+    pen.lineCap = "round";
+    pen.lineJoin = "round";
+    pen.strokeStyle = getComputedStyle(canvas).color;
+    pen.stroke(new Path2D(icons[canvas.dataset.icon]));
+  });
+}
+
+function renderTabs() {
+  const hideTabs = state.screen === "welcome" && initial === "welcome" && !state.notice;
+  q("#tabs").innerHTML = `<div class="brand"><span class="mark">${icon("logo")}</span>Lib-Git</div>
+    <div class="repo-tabs" aria-label="Open repositories">${hideTabs ? "" : state.tabs.map((index) =>
+      `<div class="tab ${index === state.repository && state.screen !== "welcome" ? "active" : ""}">
+        ${icon("repo")}<button class="truncate" data-action="open-recent" data-repo="${index}">${repos[index].name}</button>
+        <button class="tab-close" data-action="close-tab" data-repo="${index}" aria-label="Close ${repos[index].name}">${icon("close")}</button>
+      </div>`).join("")}</div>
+    ${hideTabs ? "" : iconButton("Add repository","welcome","plus")}
+    <span class="flex-space"></span>
+    ${button('Open repository <kbd>⌘O</kbd>',"welcome","folder","top-open")}
+  `;
+}
+
+function renderToolbar() {
+  const repo = repos[state.repository];
+  const bar = q("#toolbar");
+  bar.hidden = state.screen === "welcome";
+  bar.innerHTML = `<div class="toolbar-name">
+      <div class="repo-icon">${icon("repo")}</div>
+      <div class="truncate"><div class="repo-name truncate">${repo.name}</div><div class="repo-path truncate">${repo.path}</div></div>
+      <div class="tracking">${icon("branch")}<strong>main</strong><span class="link-arrow">${icon("arrow")}</span>
+      <span class="target">origin/main</span><span class="sync-count" title="2 ahead, 1 behind the local tracking ref">↑2 ↓1</span></div>
+    </div>
+    <div class="actions">
+      ${button('<span class="wide-label">Refresh</span>',"refresh","refresh","ghost",'aria-label="Refresh"')}
+      ${button("Fetch","fetch","down")}
+      ${button("Pull…","pull","pull")}
+      ${button("Push…","push","up")}
+    </div>`;
+}
+
+function renderSidebar() {
+  const branchRows = (list, remote) => list.map((name) => `<div class="ref-row ${!remote && name === "main" ? "current" : ""} ${name === state.branch ? "active" : ""}" data-ref-row="${name}">
+      <button class="ref-body" data-action="filter-branch" data-ref="${name}" title="${name}">${icon(remote ? "remote" : "branch")}<span class="label truncate">${name}</span></button>
+      ${!remote && name === "main" ? chip("HEAD","blue") : iconButton(`Actions for ${name}`,"branch-menu","more","ref-menu",`data-ref="${name}" aria-haspopup="menu"`)}
+    </div>`).join("");
+
+  sidebar.innerHTML = `<nav class="nav" aria-label="Views">
+      <button class="${state.screen === "history" ? "active" : ""}" data-action="history">${icon("history")}<span class="label">History</span></button>
+      <button class="${state.screen === "changes" ? "active" : ""}" data-action="changes">${icon("changes")}<span class="label">Changes</span>${chip("5")}</button>
+      ${state.operation ? `<button class="${state.screen === "conflicts" ? "active" : ""}" data-action="conflicts">${icon("alert")}<span class="label">Conflicts</span>${chip(state.conflictCount,"orange")}</button>` : ""}
+    </nav>
+    <section class="group" aria-label="Local branches"><div class="group-title">Local branches ${iconButton("Create branch","create","plus")}</div>${branchRows(branches.local,false)}</section>
+    <section class="group" aria-label="Remote branches"><div class="group-title">Remote branches</div>${branchRows(branches.remote,true)}</section>
+    <section class="group" aria-label="Tags"><div class="group-title">Tags</div>
+      <button class="small-link" data-action="tag">${icon("tag")} v2.8.0</button>
+    </section>
+    <section class="group" aria-label="Stashes"><div class="group-title">Stashes</div>
+      <button class="small-link truncate" data-action="stash">${icon("stash")} <span class="truncate">Deployment notes WIP</span></button>
+    </section>
+    <div class="sidebar-footer"><button class="small-link" data-action="settings">${icon("settings")} Repository settings</button></div>`;
+}
+
+function drawGraph(rows) {
+  const canvas = q("#graph");
+  if (!canvas) return;
+  const height = rows.length * 33;
+  canvas.height = height * 2;
+  canvas.style.height = `${height}px`;
+  const pen = canvas.getContext("2d");
+  pen.setTransform(2,0,0,2,0,0);
+  const colors = ["#2858d1","#8354b8","#187e75"];
+  const xs = [22,42,60];
+  const y = (index) => 16.5 + index * 33;
+  const curve = (from, to, offset, end, color) => {
+    pen.strokeStyle = color;
+    pen.beginPath();
+    pen.moveTo(xs[from],offset);
+    pen.bezierCurveTo(xs[from],(offset+end)/2,xs[to],(offset+end)/2,xs[to],end);
+    pen.stroke();
+  };
+  pen.lineWidth = 1.9;
+  if (rows === commits) {
+    curve(0,0,y(0),height,colors[0]);
+    curve(0,1,y(0),y(1),colors[1]);
+    curve(1,1,y(1),y(2),colors[1]);
+    curve(1,0,y(2),y(3),colors[1]);
+    curve(0,2,y(4),y(5),colors[2]);
+    curve(2,0,y(5),y(6),colors[2]);
+  } else {
+    curve(0,0,y(0),height,colors[0]);
+  }
+  rows.forEach((row,index) => {
+    const lane = rows === commits ? row[6] : 0;
+    pen.beginPath();
+    pen.arc(xs[lane],y(index),4.2,0,Math.PI*2);
+    pen.fillStyle = row === commits[state.commit] ? colors[lane] : "#ffffff";
+    pen.fill();
+    pen.strokeStyle = colors[lane];
+    pen.stroke();
+  });
+}
+
+function fileRow(file,index,active) {
+  const type = file.flag === "A" ? "add" : file.flag === "?" ? "new" : file.flag === "!" ? "conflict" : "";
+  return `<button class="file-line ${active ? "active" : ""}" data-action="review-file" data-index="${index}" aria-pressed="${active}">
+    <span class="flag ${type}">${file.flag}</span><span class="file-name truncate">${file.path}</span><span class="file-count">${file.delta}</span>
+  </button>`;
+}
+
+function historyRows() {
+  if (state.branch === "feature/audit-context") return [commits[1],commits[2],commits[3],commits[4],commits[6],commits[7]];
+  if (state.branch.includes("release/2.8")) return [commits[5],commits[6],commits[7]];
+  if (state.branch === "origin/main") return commits.slice(3);
+  return commits;
+}
+
+function history() {
+  const rows = historyRows();
+  const selected = commits[state.commit];
+  return `<section class="history page">
+    <header class="page-head"><h1>History</h1>
+      <button class="button ghost scope" data-action="all-refs">${icon("branch")}${state.branch}${icon("chevron")}</button>
+      <div class="flex-space"></div><label class="search">${icon("search")}<input id="revision" aria-label="Go to revision" placeholder="Go to revision"><kbd>⌘L</kbd></label>
+    </header>
+    <section class="table-wrap" aria-label="Commit history">
+      <div class="table-head"><span>Graph</span><span>Commit</span><span>Author</span><span class="table-date">Date</span><span>Hash</span></div>
+      <div class="table-body" id="commit-table"><canvas id="graph" class="graph" width="140" height="1" aria-label="Commit topology"></canvas>
+        ${rows.map((commit) => `<button class="commit-row ${commit === selected ? "active" : ""}" data-action="select-commit" data-index="${commits.indexOf(commit)}" aria-pressed="${commit === selected}">
+          <span></span><span class="commit-cells">${commit[4] ? chip(commit[4],commit[5] || "blue") : ""}<span class="subject truncate">${commit[1]}</span></span>
+          <span class="subtle truncate">${commit[2]}</span><span class="subtle table-date">${commit[3]}</span><code class="short-hash">${commit[0]}</code>
+        </button>`).join("")}
+      </div>
+    </section>
+    <div class="resize" role="separator" aria-label="Resize commit review" aria-orientation="horizontal" tabindex="0"><span></span></div>
+    <section class="review" aria-label="Commit review">
+      <div class="commit-details">
+        <div class="detail-top"><h2>${selected[1]}</h2>
+          <div class="meta-row"><span class="avatar">${selected[2].split(" ").map((part) => part[0]).join("")}</span>
+            <span class="author-name">${selected[2]}</span><span>· ${selected[3]}, 2026</span><span class="flex-space"></span>
+            <code>${selected[0]}</code>${iconButton("Copy commit ID","copy-commit","copy")}</div>
+          <div class="parent-row"><span>${state.commit === 0 ? "Compare parent" : "Parent"}</span>
+            ${button(state.commit === 0 ? "1  f42b8c0" : "f42b8c0","parent-one","",state.parent === 0 ? "active" : "")}
+            ${state.commit === 0 ? button("2  3d2b9e4","parent-two","",state.parent === 1 ? "active" : "") : ""}
+            ${state.commit === 0 ? chip("Merge commit") : ""}
+          </div>
+        </div>
+        <div class="files-head">Changed files ${chip("3")}</div>
+        <div class="file-list">${reviewFiles.map((file,index) => fileRow(file,index,state.file === index)).join("")}</div>
+      </div>
+      ${diff(false,reviewFiles[state.file].path)}
+    </section>
+  </section>`;
+}
+
+const sourceA = [
+  [41,41," ","  const deployment = await store.get(request.deploymentId);"],
+  [42,42," ","  if (!deployment) {"],
+  [43,-1,"−",'    throw new Error("Deployment not found");'],
+  [-1,43,"+","    throw new DeploymentNotFoundError(request.deploymentId);"],
+  [44,44," ","  }"],
+  [45,45," ","  const cached = await session.cache.get(deployment.id);"]
+];
+
+const sourceB = [
+  [87,87," ","  await session.checkpoints.write(result.id, result.checkpoint);"],
+  [88,88," ","  const context = session.auditContext;"],
+  [89,-1,"−",'  await audit.log("deployment.completed");'],
+  [-1,89,"+",'  await audit.log("deployment.completed", {'],
+  [-1,90,"+","    id: result.id, correlationId: context.correlationId,"],
+  [-1,91,"+","  });"],
+  [90,92," ","  return result;"],
+  [91,93," ","}"]
+];
+
+const reconcileHunks = [
+  [1,"@@ -41,6 +41,6 @@  reconcileDeployment",sourceA],
+  [2,"@@ -87,5 +87,7 @@  reconcileDeployment",sourceB]
+];
+
+const paths = {
+  "reconcile.ts":"src/deployments/reconcile.ts",
+  "runtime.json":"config/runtime.json",
+  "support.md":"docs/support.md",
+  "retry-policy.ts":"src/deployments/retry-policy.ts",
+  "audit-context.ts":"src/audit/audit-context.ts"
+};
+
+function escapeText(text) {
+  return text.replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;");
+}
+
+function codeText(text) {
+  return escapeText(text).replace(/(&quot;[^&]*?&quot;)|\b(const|new|throw|return|if|await|export|async)\b/g,
+    (match, literal) => `<span class="${literal ? "string" : "keyword"}">${match}</span>`);
+}
+
+function rowClass(change,index,hunk) {
+  return [change[2] === "+" ? "added" : change[2] === "−" ? "removed" : "",
+    state.selections.has(`${hunk}:${index}`) && state.screen === "changes" ? "selected" : ""].join(" ");
+}
+
+function unifiedRow(change,index,hunk,editable) {
+  const action = editable && change[2] !== " " ? `role="button" tabindex="0" data-action="select-line" data-line="${hunk}:${index}" aria-pressed="${state.selections.has(`${hunk}:${index}`)}"` : "";
+  return `<div class="code-row ${rowClass(change,index,hunk)}" ${action}><span class="num">${change[0] > 0 ? change[0] : ""}</span><span class="num">${change[1] > 0 ? change[1] : ""}</span><span class="sign">${change[2]}</span><code>${codeText(change[3])}</code></div>`;
+}
+
+function splitRows(lines,hunk,editable) {
+  const cell = (change,index,side) => {
+    if (!change) return '<div class="split-cell blank"></div>';
+    const hasAction = editable && change[2] !== " ";
+    return `<div class="split-cell ${rowClass(change,index,hunk)}" ${hasAction ? `role="button" tabindex="0" data-action="select-line" data-line="${hunk}:${index}" aria-pressed="${state.selections.has(`${hunk}:${index}`)}"` : ""}>
+      <span class="num">${change[side] > 0 ? change[side] : ""}</span><span class="sign">${change[2]}</span><code class="text">${codeText(change[3])}</code>
+    </div>`;
+  };
+  let rows = "";
+  for (let i = 0; i < lines.length;) {
+    const [line,index] = lines[i];
+    if (line[2] === " ") {
+      rows += `<div class="split-row">${cell(line,index,0)}${cell(line,index,1)}</div>`;
+      i++;
+      continue;
+    }
+    const left = [];
+    const right = [];
+    while (i < lines.length && lines[i][0][2] !== " ") {
+      (lines[i][0][2] === "−" ? left : right).push(lines[i]);
+      i++;
+    }
+    for (let j = 0; j < Math.max(left.length,right.length); j++) {
+      rows += `<div class="split-row">${cell(left[j]?.[0],left[j]?.[1],0)}${cell(right[j]?.[0],right[j]?.[1],1)}</div>`;
+    }
+  }
+  return rows;
+}
+
+function diff(editable,path) {
+  const isActiveFile = path === paths["reconcile.ts"];
+  const staged = state.changeGroup === "index";
+  const comparison = isActiveFile ? reconcileHunks
+    : [[1,"@@ -1,2 +1,4 @@",[[1,1," ","# " + path.split("/").at(-1)],[-1,2,"+","Record the request context for deployment changes."],[-1,3,"+","Include the selected policy and correlation ID."]]]];
+  const hunks = comparison.map(([id,label,lines]) => {
+    const indexed = lines.map((line,index) => [line,index]);
+    if (!editable || !isActiveFile) return [id,label,indexed];
+    const visible = indexed.filter(([line,index]) => line[2] === " " || state.stagedLines.has(`${id}:${index}`) === staged);
+    return [id,label,visible];
+  }).filter(([,,lines]) => lines.some(([line]) => line[2] !== " "));
+  const selectedLines = editable ? state.selections.size : 0;
+  return `<section class="diff" aria-label="File diff">
+    <header class="diff-head"><span class="path truncate">${icon("file")}<code class="truncate">${path}</code></span>
+      ${editable ? chip(staged ? "Staged" : "Unstaged",staged ? "green" : "orange") : ""}
+      <span class="flex-space"></span>${chip(`${hunks.length} ${hunks.length === 1 ? "hunk" : "hunks"}`)}
+      <div class="segment" aria-label="Diff layout"><button data-action="unified" class="${state.split ? "" : "active"}" aria-pressed="${!state.split}">Unified</button>
+        <button data-action="split" class="${state.split ? "active" : ""}" aria-pressed="${state.split}">Split</button></div>
+    </header>
+    <div class="patch" tabindex="0">
+      ${state.split ? '<div class="split-label"><span>Before</span><span>After</span></div>' : ""}
+      ${hunks.map(([id,label,lines]) => `<div class="hunk"><span>${label}</span>
+        ${editable ? button(staged ? "Unstage hunk" : "Stage hunk","stage","", "", `data-hunk="${id}"`) : ""}</div>
+        ${state.split ? splitRows(lines,id,editable) : lines.map(([line,index]) => unifiedRow(line,index,id,editable)).join("")}`).join("")}
+    </div>
+    <div class="patch-footer">${editable ? `<span>${selectedLines ? `${selectedLines} selected lines` : "Select changed lines to apply individually"}</span>
+      ${button(staged ? "Unstage selected" : "Stage selected","stage-selected","check",selectedLines ? "primary" : "",selectedLines ? "" : "disabled")}` : ""}</div>
+  </section>`;
+}
+
+const changeEntries = [
+  {name:"reconcile.ts",flag:"M",delta:"+4 −2"},
+  {name:"retry-policy.ts",flag:"M",delta:"+8 −3"},
+  {name:"audit-context.ts",flag:"M",delta:"+3 −1"},
+  {name:"support.md",flag:"?",delta:"+12"},
+  {name:"runtime.json",flag:"M",delta:"+2 −1"}
+];
+
+function changes() {
+  const group = (title, files, kind) => `<section class="file-group" aria-label="${title}"><div class="group-line"><span>${title} ${chip(files.length)}</span>
+    ${button(kind === "working" ? "Stage all" : "Unstage all",kind === "working" ? "stage-all" : "unstage-all")}</div>
+    ${files.map((file) => `<button class="file-line ${state.changedFile === file.name && state.changeGroup === kind ? "active" : ""}" data-action="change-file"
+      data-file="${file.name}" data-group="${kind}" aria-pressed="${state.changedFile === file.name && state.changeGroup === kind}">
+      <span class="flag ${file.flag === "?" ? "new" : ""}">${file.flag}</span>
+      <span class="file-name truncate">${file.name}<span class="file-caption truncate">${paths[file.name]}</span></span><span class="file-count">${file.delta}</span>
+    </button>`).join("")}</section>`;
+  const staged = [changeEntries[4], ...changeEntries.filter((file) => file.name !== "runtime.json" && state.stagedFiles.has(file.name))];
+  const working = changeEntries.slice(0,4).filter((file) => !state.stagedFiles.has(file.name) || file.name === "reconcile.ts" && state.stagedLines.size < reconcileLineIds().length);
+  return `<section class="change-page page">
+    <div class="changes-side"><header class="page-head"><h1>Changes</h1>${chip("5 paths")}</header>
+      ${group("Unstaged changes",working,"working")}
+      ${group("Staged changes",staged,"index")}
+      <section class="composer"><div class="composer-title"><h2>Commit</h2>${button("Identity","identity","", "ghost")}</div>
+        <textarea aria-label="Commit message" id="message" placeholder="Commit message">${escapeText(state.message)}</textarea>
+        <div class="actions">${button(state.reviewed ? "Staged reviewed" : "Review staged","review-index",state.reviewed ? "check" : "")}
+          ${button("Commit","commit","", "primary",state.reviewed && state.message.trim() ? "" : "disabled")}</div>
+      </section>
+    </div>
+    ${diff(true,paths[state.changedFile])}
+  </section>`;
+}
+
+function conflicts() {
+  const isPolicy = state.conflictFile === "retry-policy.ts";
+  const ours = isPolicy ? "const retry = { maxAttempts: 3, delayMs: 250 };" : "await audit.log(eventName, { deploymentId });";
+  const theirs = isPolicy ? "const retry = { maxAttempts: 5, delayMs: 500 };" : "await audit.log(eventName, { correlationId: context.id });";
+  const renderSide = (title,tip,operation,text) => `<div class="conflict-side">
+    <header><span>${title} <code>${tip}</code></span>${button("Use this side",operation)}</header>
+    <code>const eventName = "deployment.completed";<span class="conflict-line">${text}</span>return result;</code>
+  </div>`;
+  return `<section class="conflict-page page">
+    <header class="conflict-banner">${icon("alert")}<strong>${state.operation} in progress</strong><span>${state.operation === "Rebase" ? "main onto feature/audit-context" : "feature/audit-context → main"}</span>
+      <span class="flex-space"></span>${chip(`${state.conflictCount} unresolved`,"orange")}</header>
+    <div class="conflict-body"><section class="conflict-files"><div class="group-title">Conflicted files</div>
+      ${["reconcile.ts","retry-policy.ts"].map((name,index) => fileRow({path:name,flag:state.resolved.has(name) ? "A" : "!",delta:""},index,name === state.conflictFile).replace("review-file","conflict-file")).join("")}
+      <div class="actions">${button("Abort…","abort")}${button(`Continue ${state.operation.toLowerCase()}`,"continue","", "primary",state.conflictCount ? "disabled" : "")}</div></section>
+      <section class="conflict-editor" aria-label="Conflict editor">
+        <header class="diff-head"><span class="path truncate">${icon("file")}<code class="truncate">${paths[state.conflictFile]}</code></span><span class="flex-space"></span>${button("View base","base")}</header>
+        <div class="conflict-sides">${renderSide("Current · main","8f3ac71","ours",ours)}${renderSide("Incoming · feature/audit-context","3d2b9e4","theirs",theirs)}</div>
+        <div class="result-editor"><label for="resolution">Result</label><textarea id="resolution" spellcheck="false">${escapeText(state.resolution || 'const eventName = "deployment.completed";\n' + ours + '\nreturn result;')}</textarea></div>
+        <div class="patch-footer"><span>${state.resolved.has(state.conflictFile) ? "Resolved" : "Review the result before marking this file resolved"}</span>
+          ${button("Mark resolved","resolve","check","primary",state.resolved.has(state.conflictFile) ? "disabled" : "")}</div>
+      </section>
+    </div>
+  </section>`;
+}
+
+function renderWelcome() {
+  welcome.innerHTML = `<div class="welcome-main">
+    <div class="welcome-opening"><span class="mark">${icon("logo")}</span><h1>Open a repository</h1></div>
+    <div class="welcome-actions">${button("Choose folder…","choose","folder","primary")}${button("Clone…","clone","clone")}
+      <span class="flex-space"></span>${button("Enter path…","choose","", "ghost")}</div>
+    <section class="recents"><h2>Recent repositories</h2>
+      ${repos.map((repo,index) => state.forgotten.has(index) ? "" : `<div class="recent-row">
+        <span class="repo-icon">${icon(repo.missing ? "alert" : "repo")}</span>
+        <div class="location"><h3>${repo.name}</h3><p class="truncate">${repo.path}</p></div>
+        ${repo.missing ? button(repo.note,"locate","folder") : `<span class="subtle wide-label">${repo.note}</span>${button("Open","open-recent","","",`data-repo="${index}"`)}`}
+        ${iconButton(`Remove ${repo.name} from recents`,"forget","more","",`data-repo="${index}"`)}
+      </div>`).join("")}
+    </section>
+    <footer class="welcome-footer">${button("Initialize a repository…","init","","ghost")}
+      ${state.tabs.length && initial !== "welcome" ? button("Back to workspace","history","","ghost") : ""}
+    </footer>
+  </div>`;
+}
+
+function renderFooter() {
+  const empty = state.screen === "welcome";
+  status.innerHTML = `${empty ? "" : `<span><span class="status-mark"></span> ${state.operation ? `${state.operation} in progress` : "5 changed paths"}</span>`}
+    <span class="footer-message truncate" role="status">${escapeText(state.notice)}</span>
+    <span class="flex-space"></span>
+    ${empty ? "" : `<span>Last fetched today, 10:24</span><button data-action="sync">Sync details</button>`}`;
+}
+
+function render() {
+  const empty = state.screen === "welcome";
+  main.classList.toggle("show-welcome", empty);
+  sidebar.hidden = empty;
+  content.hidden = empty;
+  welcome.hidden = !empty;
+  renderTabs();
+  renderToolbar();
+  if (empty) {
+    renderWelcome();
+  } else {
+    renderSidebar();
+    content.innerHTML = state.screen === "history" ? history() : state.screen === "changes" ? changes() : conflicts();
+    if (state.screen === "history") {
+      q("#revision").value = state.revisionText;
+      drawGraph(historyRows());
+    }
+  }
+  renderFooter();
+  drawIcons();
+}
+
+function openMenu(ref, target, x, y, focusEntry = true) {
+  if (!target) return;
+  closeMenu(false);
+  state.menuOwner = target;
+  const branch = ref.startsWith("origin/") ? ref.slice(7) : ref;
+  const isRemote = branch !== ref;
+  target.closest(".ref-row")?.classList.add("menu-source");
+  const item = (label,action,picture,extra = "",disabled = false) => `<button class="${extra}" role="menuitem" data-action="${action}" data-ref="${ref}" ${disabled ? "disabled" : ""}>${icon(picture)}${label}</button>`;
+  menu.innerHTML = `<div class="menu-title">${ref}</div>
+    ${item("View history","filter-branch","history")}${item("Copy ref name","copy-ref","copy")}
+    <div class="menu-separator"></div>
+    ${item(isRemote ? "Create tracking branch…" : "Switch to branch","switch","branch","","main" === ref)}
+    ${item("Create branch here…","create","plus")}
+    ${item("Merge into main…","merge","merge","","main" === ref)}
+    ${item("Rebase main onto this branch…","rebase","pull","","main" === ref)}
+    ${isRemote ? "" : `<div class="menu-separator"></div>
+      ${item("Rename…","rename","edit")}${item("Set upstream…","upstream","link")}${item("Delete local branch…","delete","trash","danger","main" === ref)}`}`;
+  menu.hidden = false;
+  menu.style.left = Math.max(6, Math.min(x, window.innerWidth - menu.offsetWidth - 10)) + "px";
+  menu.style.top = Math.max(6, Math.min(y, window.innerHeight - menu.offsetHeight - 10)) + "px";
+  drawIcons(menu);
+  if (focusEntry) q("button:not(:disabled)",menu).focus();
+}
+
+function closeMenu(restore = true) {
+  if (menu.hidden) return;
+  menu.hidden = true;
+  state.menuOwner?.closest(".ref-row")?.classList.remove("menu-source");
+  if (restore) state.menuOwner?.focus();
+  state.menuOwner = null;
+}
+
+function showDialog(title,body,action = "Done",operation = "") {
+  state.dialogOwner = document.activeElement;
+  dialog.innerHTML = `<form method="dialog" data-operation="${operation}"><div class="dialog-main"><h2 id="dialog-heading">${title}</h2>${body}</div>
+    <div class="dialog-actions">${button("Cancel","cancel","","",'type="button"')}
+      <button class="button primary" value="confirm">${action}</button></div></form>`;
+  dialog.showModal();
+  drawIcons(dialog);
+}
+
+function facts(entries) {
+  return `<dl>${entries.map(([label,value]) => `<dt>${label}</dt><dd>${value}</dd>`).join("")}</dl>`;
+}
+
+function dialogFor(action, ref = "") {
+  const field = (label,value = "") => `<label for="dialog-input">${label}</label><input id="dialog-input" value="${value}">`;
+  const branchTip = facts([["Branch",`<code>${ref || "main"}</code>`],["Tip","<code>3d2b9e4</code>"]]);
+  const destination = facts([["Local","<code>main · 8f3ac71</code>"],["Remote","origin"],["Remote ref","<code>refs/heads/main</code>"]]);
+  const entries = {
+    choose:["Open local repository",field("Repository path","~/Projects/atlas/atlas-platform"),"Open","open-recent"],
+    clone:["Clone a repository",field("Remote URL","https://git.example.org/atlas/atlas-platform.git"),"Clone"],
+    locate:["Locate release-archive",field("New repository path"),"Locate"],
+    init:["Initialize a repository",field("New directory"),"Initialize"],
+    settings:["Repository settings",facts([["Repository",repos[state.repository].name],["Path",repos[state.repository].path],["Remote","origin"]]),"Done"],
+    identity:["Commit identity",facts([["Name","Mina Chen"],["Email","mina@example.org"]]),"Done"],
+    pull:["Pull from origin",destination + "<p>Fast-forward only. Divergent history requires a separate integration review.</p>","Pull"],
+    push:["Push to origin",destination + "<p>Normal push. The remote can reject a non-fast-forward update.</p>","Push"],
+    sync:["Synchronization",facts([["Repository",repos[state.repository].name],["Remote","origin"],["Last fetch","Today, 10:24 · Completed"]]),"Done"],
+    create:["Create branch",branchTip + field("Branch name"),"Create"],
+    switch:[ref.startsWith("origin/") ? "Create tracking branch" : "Switch to branch",branchTip + (ref.startsWith("origin/") ? field("Local branch name",ref.slice(7)) : "<p>Local changes that would be overwritten block checkout.</p>"),"Continue"],
+    rename:["Rename branch",branchTip + field("New name",ref),"Rename"],
+    upstream:["Set upstream",branchTip + field("Tracking ref","origin/main"),"Save"],
+    delete:["Delete local branch",branchTip + "<p>This branch has 2 commits that are absent from main.</p>","Delete branch"],
+    merge:["Merge into main",facts([["Source",`<code>${ref} · 3d2b9e4</code>`],["Destination","<code>main · 8f3ac71</code>"]]),"Merge","start-Merge"],
+    rebase:["Rebase main",facts([["Branch","<code>main · 8f3ac71</code>"],["New base",`<code>${ref} · 3d2b9e4</code>`],["Mode","Linear rebase"]]),"Start rebase","start-Rebase"],
+    abort:[`Abort ${state.operation.toLowerCase()}?`, "<p>Git will attempt to restore the state before this operation started.</p>", "Abort","abort"],
+    base:["Base version",'<code>await audit.log(eventName);</code>',"Done"],
+    stash:["Deployment notes WIP",facts([["Stash","stash@{0}"],["Branch","main"]]),"Done"]
+  };
+  if (entries[action]) {
+    const [title,body,label,operation] = entries[action];
+    showDialog(title,body,label,operation);
+  }
+}
+
+function go(screen) {
+  state.screen = screen;
+  state.notice = "";
+  closeMenu(false);
+  render();
+}
+
+function setBranch(ref, select = true) {
+  state.branch = ref;
+  if (select) {
+    state.commit = commits.indexOf(historyRows()[0]);
+    state.file = 0;
+    state.parent = 0;
+  }
+  go("history");
+}
+
+function openRepository(index) {
+  if (!repos[index] || repos[index].missing) return;
+  if (!state.tabs.includes(index)) state.tabs.push(index);
+  state.repository = index;
+  state.commit = 0;
+  state.file = 0;
+  state.branch = "All refs";
+  go("history");
+}
+
+function reconcileLineIds(hunk) {
+  return reconcileHunks.filter(([id]) => !hunk || id === hunk).flatMap(([id,,lines]) =>
+    lines.flatMap((line,index) => line[2] === " " ? [] : [`${id}:${index}`]));
+}
+
+function toggleStage(hunk,selectedLines = null) {
+  if (state.changedFile === "reconcile.ts") {
+    const lines = selectedLines ?? reconcileLineIds(hunk);
+    for (const line of lines) {
+      if (state.changeGroup === "index") state.stagedLines.delete(line);
+      else state.stagedLines.add(line);
+    }
+    if (state.stagedLines.size) state.stagedFiles.add(state.changedFile);
+    else state.stagedFiles.delete(state.changedFile);
+  } else if (state.changeGroup === "index") {
+    state.stagedFiles.delete(state.changedFile);
+  } else {
+    state.stagedFiles.add(state.changedFile);
+  }
+  state.notice = `Updated index · ${selectedLines ? "selected lines" : "hunk"} ${state.changeGroup === "index" ? "unstaged" : "staged"}`;
+  state.reviewed = false;
+  state.selections.clear();
+  if (state.changedFile === "reconcile.ts" && state.changeGroup === "index" && state.stagedLines.size === 0) state.changeGroup = "working";
+  if (state.changedFile === "reconcile.ts" && state.changeGroup === "working" && state.stagedLines.size === reconcileLineIds().length) state.changeGroup = "index";
+  render();
+}
+
+document.addEventListener("click", (event) => {
+  const trigger = event.target.closest("[data-action]");
+  if (!trigger || trigger.disabled) {
+    if (!menu.contains(event.target)) closeMenu(false);
+    return;
+  }
+  const {action,ref,index,repo,file,group,hunk,line} = trigger.dataset;
+  if (action === "branch-menu") {
+    const rect = trigger.getBoundingClientRect();
+    openMenu(ref,trigger,rect.right - 3,rect.top + 2);
+    return;
+  }
+  const menuOwner = state.menuOwner;
+  closeMenu(false);
+  switch (action) {
+    case "history": case "changes": case "conflicts": case "welcome": go(action); break;
+    case "open-recent": openRepository(Number(repo)); break;
+    case "close-tab":
+      state.tabs = state.tabs.filter((item) => item !== Number(repo));
+      if (state.repository === Number(repo)) state.tabs.length ? openRepository(state.tabs[0]) : go("welcome");
+      else renderTabs();
+      drawIcons();
+      break;
+    case "forget":
+      showDialog("Remove from recent repositories?",`<p>${repos[Number(repo)].name} will be removed from the list.</p>`,"Remove",`forget-${repo}`);
+      break;
+    case "select-commit":
+      state.commit = Number(index); state.file = 0; state.parent = 0; go("history"); break;
+    case "review-file": state.file = Number(index); render(); break;
+    case "change-file":
+      state.changedFile = file; state.changeGroup = group; state.selections.clear(); render(); break;
+    case "parent-one": case "parent-two":
+      state.parent = action === "parent-one" ? 0 : 1; state.file = state.parent ? 2 : 0; render(); break;
+    case "unified": case "split":
+      state.split = action === "split"; render(); q(`.segment [data-action="${action}"]`)?.focus(); break;
+    case "filter-branch": setBranch(ref); break;
+    case "all-refs": setBranch("All refs"); break;
+    case "tag":
+      state.commit = 4; state.file = 2; state.branch = "All refs"; go("history"); break;
+    case "copy-ref": case "copy-commit": {
+      const value = action === "copy-ref" ? (ref.startsWith("origin/") ? "refs/remotes/" : "refs/heads/") + ref : commits[state.commit][0];
+      navigator.clipboard?.writeText(value).catch(() => {});
+      state.notice = value; renderFooter(); break;
+    }
+    case "select-line":
+      if (state.selections.has(line)) state.selections.delete(line); else state.selections.add(line);
+      render(); q(`[data-line="${line}"]`)?.focus(); break;
+    case "stage": toggleStage(Number(hunk)); break;
+    case "stage-selected": if (state.selections.size) toggleStage(null,[...state.selections]); break;
+    case "stage-all":
+      changeEntries.slice(0,4).forEach((entry) => state.stagedFiles.add(entry.name));
+      state.stagedLines = new Set(reconcileLineIds()); state.changeGroup = "index"; state.selections.clear(); render(); break;
+    case "unstage-all":
+      state.stagedFiles.clear(); state.stagedLines.clear(); state.changeGroup = "working"; state.selections.clear(); render(); break;
+    case "review-index":
+      state.reviewed = true; state.changeGroup = "index"; state.changedFile = "runtime.json"; render(); break;
+    case "commit":
+      showDialog("Commit staged changes?",facts([["Branch","main"],["Message",escapeText(state.message)]]),"Commit","commit"); break;
+    case "refresh": case "fetch":
+      state.notice = action === "fetch" ? "Fetch completed · origin" : "Repository refreshed"; renderFooter(); break;
+    case "conflict-file":
+      state.conflictFile = Number(index) ? "retry-policy.ts" : "reconcile.ts"; state.resolution = ""; render(); break;
+    case "ours": case "theirs": {
+      const choice = trigger.closest(".conflict-side").querySelector(".conflict-line").textContent;
+      state.resolution = 'const eventName = "deployment.completed";\n' + choice + "\nreturn result;";
+      q("#resolution").value = state.resolution; q("#resolution").focus(); break;
+    }
+    case "resolve":
+      state.resolved.add(state.conflictFile); state.conflictCount = Math.max(0,2 - state.resolved.size);
+      state.notice = "Resolution saved"; render(); break;
+    case "continue": {
+      const kind = state.operation;
+      state.operation = ""; go("history"); state.notice = `${kind} completed`; renderFooter(); break;
+    }
+    case "cancel": dialog.close("cancel"); break;
+    default:
+      dialogFor(action,ref);
+      if (menuOwner && dialog.open) state.dialogOwner = menuOwner;
+  }
+});
+
+dialog.addEventListener("submit", (event) => {
+  const operation = event.target.dataset.operation;
+  if (operation === "open-recent") openRepository(0);
+  if (operation?.startsWith("forget-")) {
+    state.forgotten.add(Number(operation.slice(7))); render();
+  }
+  if (operation?.startsWith("start-")) {
+    state.operation = operation.slice(6);
+    state.conflictCount = 2;
+    state.resolved.clear();
+    go("conflicts");
+  }
+  if (operation === "abort") { state.operation = ""; go("history"); }
+  if (operation === "commit") {
+    state.message = ""; state.reviewed = false;
+    state.notice = "Commit recorded in preview"; render();
+  }
+});
+
+dialog.addEventListener("close", () => {
+  if (state.dialogOwner?.isConnected) state.dialogOwner.focus();
+});
+
+document.addEventListener("contextmenu", (event) => {
+  const row = event.target.closest("[data-ref-row]");
+  if (!row) return;
+  event.preventDefault();
+  openMenu(row.dataset.refRow,q(".ref-body",row),event.clientX,event.clientY);
+});
+
+document.addEventListener("input", (event) => {
+  const input = event.target;
+  if (input.id === "message") {
+    state.message = input.value;
+    q('[data-action="commit"]').disabled = !state.reviewed || !state.message.trim();
+  }
+  if (input.id === "resolution") state.resolution = input.value;
+  if (input.id === "revision") state.revisionText = input.value;
+});
+
+document.addEventListener("keydown", (event) => {
+  if (dialog.open) return;
+  if (!menu.hidden && ["Escape","ArrowUp","ArrowDown"].includes(event.key)) {
+    event.preventDefault();
+    if (event.key === "Escape") return closeMenu();
+    const items = [...menu.querySelectorAll("button:not(:disabled)")];
+    const index = Math.max(0,items.indexOf(document.activeElement));
+    items[(index + (event.key === "ArrowDown" ? 1 : items.length - 1)) % items.length].focus();
+    return;
+  }
+  if (event.key === "F10" && event.shiftKey || event.key === "ContextMenu") {
+    const row = event.target.closest("[data-ref-row]");
+    if (row) {
+      event.preventDefault();
+      const rect = row.getBoundingClientRect();
+      openMenu(row.dataset.refRow,q(".ref-body",row),rect.right,rect.top);
+    }
+    return;
+  }
+  if (event.target.id === "revision" && event.key === "Enter") {
+    const index = commits.findIndex((item) => state.revisionText.trim() && item[0].startsWith(state.revisionText.trim()));
+    if (index >= 0) { state.commit = index; setBranch("All refs",false); }
+    else { state.notice = "Revision not found"; renderFooter(); }
+    return;
+  }
+  if (event.target.matches('[role="button"]') && ["Enter"," "].includes(event.key)) {
+    event.preventDefault(); event.target.click(); return;
+  }
+  if (!event.metaKey && !event.ctrlKey) return;
+  const key = event.key.toLowerCase();
+  if (key === "o" || key === "t") { event.preventDefault(); go("welcome"); }
+  if (key === "1") { event.preventDefault(); go("history"); }
+  if (key === "2") { event.preventDefault(); go("changes"); }
+  if (key === "3" && state.operation) { event.preventDefault(); go("conflicts"); }
+  if (key === "l") { event.preventDefault(); go("history"); q("#revision").focus(); }
+  if (key === "r") { event.preventDefault(); state.notice = "Repository refreshed"; renderFooter(); }
+});
+
+content.addEventListener("pointerdown", (event) => {
+  const separator = event.target.closest(".resize");
+  if (!separator) return;
+  const container = separator.parentElement;
+  const bounds = container.getBoundingClientRect();
+  const update = (move) => {
+    const height = Math.max(170,Math.min(bounds.height - 240, move.clientY - bounds.top - 50));
+    container.style.gridTemplateRows = `50px ${height}px 8px minmax(0,1fr)`;
+  };
+  separator.setPointerCapture(event.pointerId);
+  separator.addEventListener("pointermove",update);
+  separator.addEventListener("lostpointercapture",() => separator.removeEventListener("pointermove",update),{once:true});
+});
+
+state.stagedLines = new Set();
+state.stagedFiles = new Set();
+state.forgotten = new Set();
+state.resolved = new Set();
+
+if (state.screen === "branch") {
+  state.screen = "history";
+  render();
+  const target = q('[data-ref="feature/audit-context"][data-action="branch-menu"]');
+  const rect = target.getBoundingClientRect();
+  openMenu("feature/audit-context",target,rect.right + 1,rect.top - 3,false);
+} else {
+  render();
+}
+</script>
+</body>
+</html>

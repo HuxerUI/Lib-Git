@@ -1,0 +1,50 @@
+import std;
+import mcpp;
+import huxerui.rules;
+
+namespace {
+
+bool LinkLibgit2(const std::filesystem::path& prefix) {
+    const auto include = prefix / "include";
+    const auto lib = prefix / "lib";
+    std::ifstream package(lib / "pkgconfig" / "libgit2.pc");
+    if (!std::filesystem::exists(include / "git2.h") || !package) {
+        std::cerr << "Lib-Git requires a target-compatible libgit2 installation with lib/pkgconfig/libgit2.pc.\n";
+        return false;
+    }
+    mcpp::include_dir(include.string().c_str());
+    mcpp::link_search(lib.string().c_str());
+    mcpp::link_lib("git2");
+
+    // The static archive's TLS and compression dependencies must reach the final consumer.
+    for (std::string line; std::getline(package, line);) {
+        if (!line.starts_with("Libs.private:")) {
+            continue;
+        }
+        std::istringstream flags(line.substr(std::string_view("Libs.private:").size()));
+        for (std::string flag; flags >> flag;) {
+            if (flag.starts_with("-L")) {
+                mcpp::link_search(flag.c_str() + 2);
+            } else if (flag.starts_with("-l")) {
+                mcpp::link_lib(flag.c_str() + 2);
+            } else if (flag != "-pthread") {
+                mcpp::link_flag(flag.c_str());
+            }
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+int main() {
+    const char* prefix = std::getenv("HUXERUI_GIT_LIBGIT2_PREFIX");
+    if (!prefix || !*prefix) {
+        std::cerr << "Set HUXERUI_GIT_LIBGIT2_PREFIX to libgit2 1.9.7 built for the selected mcpp target.\n";
+        return 1;
+    }
+    if (!LinkLibgit2(prefix)) {
+        return 1;
+    }
+    return huxerui::rules::configure({.resources = "resources"}) ? 0 : 1;
+}
