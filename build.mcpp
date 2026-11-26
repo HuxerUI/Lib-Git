@@ -38,13 +38,13 @@ bool LinkLibgit2(const std::filesystem::path& prefix) {
 } // namespace
 
 int main() {
-    const char* prefix = std::getenv("HUXERUI_GIT_LIBGIT2_PREFIX");
-    if (!prefix || !*prefix) {
-        std::cerr << "Set HUXERUI_GIT_LIBGIT2_PREFIX to libgit2 1.9.7 built for the selected mcpp target.\n";
-        return 1;
+    if (const char* prefix = std::getenv("HUXERUI_GIT_LIBGIT2_PREFIX"); prefix && *prefix) {
+        if (!LinkLibgit2(prefix)) {
+            return 1;
+        }
     }
-    if (!LinkLibgit2(prefix)) {
-        return 1;
-    }
-    return huxerui::rules::configure({.resources = "resources"}) ? 0 : 1;
+    return huxerui::rules::configure({
+        .resources = "resources",
+        .resource_namespace = "huxerui_git",
+    }) ? 0 : 1;
 }

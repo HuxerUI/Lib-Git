@@ -3,6 +3,8 @@ namespace = "huxerui"
 name = "git"
 version = "0.1.0"
 standard = "c++23"
+license = "MIT"
+repo = "https://github.com/HuxerUI/Lib-Git"
 description = "Repository inspection and Git operations for HuxerUI"
 
 [package.metadata.huxerui]
@@ -12,7 +14,8 @@ id = "org.huxerui.lib.git"
 resources = "resources"
 
 [dependencies]
-huxerui = { path = "../HuxerUI" }
+huxerui.huxerui = "0.5.5"
+compat.libgit2  = "1.9.7"
 
 [targets.git]
 kind = "lib"
@@ -23,3 +26,6 @@ path = "modules/git.cppm"
 [build]
 sources = []
 include_dirs = ["include"]
+
+[target.windows.build]
+defines = ["WIN32_LEAN_AND_MEAN", "NOMINMAX"]
