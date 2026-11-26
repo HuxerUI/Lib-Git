@@ -298,7 +298,7 @@ Task<GitResult<std::vector<TreeEntry>>> Repository::ReadTreeAsync(ObjectId id) c
     for (std::size_t i = 0; i < git_tree_entrycount(tree.get()); ++i) {
       const auto* entry = git_tree_entry_byindex(tree.get(), i);
       entries.push_back({git_tree_entry_name(entry), Id(git_tree_entry_id(entry)),
-                         git_tree_entry_filemode(entry)});
+                         static_cast<std::uint32_t>(git_tree_entry_filemode(entry))});
     }
     return entries;
   }, true);

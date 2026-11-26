@@ -57,7 +57,7 @@ VersionedBlob TreeBlob(git_tree* tree, const std::string& path) {
     return {};
   }
   Check(code, "Read path at HEAD");
-  return {Id(git_tree_entry_id(entry)), git_tree_entry_filemode(entry)};
+  return {Id(git_tree_entry_id(entry)), static_cast<std::uint32_t>(git_tree_entry_filemode(entry))};
 }
 
 bool Plain(std::uint32_t mode) {
