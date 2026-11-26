@@ -1,51 +1,136 @@
 # Lib-Git
 
-Lib-Git provides a C++ Git client API for HuxerUI. It uses libgit2 for repository inspection, guarded index updates, commit and amend, history integration, and remote transfers. The preview has repository tabs, a synchronization toolbar, and dedicated History, Changes, and Conflicts workspaces. Desktop History spans the workspace above a resizable commit review area. Changes and Conflicts place the file list next to a resizable diff or conflict editor. Narrow layouts open commit, diff, and conflict details as separate pages.
+Lib-Git is a coroutine-friendly Git library for [HuxerUI](https://github.com/HuxerUI/HuxerUI). It uses libgit2 to open repositories, inspect history and working changes, update the index, and synchronize with remotes. Applications own review, confirmation, and credential policy.
 
-The [technical design](docs/lib-git-technical-design.md) describes the target product, concurrency contracts, and release gates.
+Link **`HuxerUI::Git`**, include **`<huxerui/git.h>`**, and use the **`huxerui::git`** namespace. [Public API](include/huxerui/git.h)
 
-## Build and run
+## Capabilities
 
-Use HuxerUI SDK 0.5.5 with its matching toolchain. The CMake path downloads the pinned libgit2 1.9.7 source archive, verifies its SHA-256 digest, and links it statically. An existing source directory can be selected with `FETCHCONTENT_SOURCE_DIR_LIBGIT2`.
+| Area | Public API |
+| --- | --- |
+| Repository access | Discover, open, initialize, and clone. Retain access granted by an SDK `FileReference`. |
+| History and inspection | Page commit history, inspect trees and blobs, compare ancestry, read refs, and run blame. |
+| Index and commits | Inspect status and diffs, stage or unstage files, hunks, and lines, restore paths, commit, and amend. |
+| Integration | Switch branches, reset, merge, rebase, cherry-pick, revert, and resolve conflicts. |
+| Repository management | Manage branches, tags, remotes, stashes, submodules, and linked worktrees. |
+| Remote transfers | Fetch, pull, and push with typed progress, cooperative stop, and optional credential reuse. |
 
-```sh
-cmake -S examples/preview -B build/preview -G Ninja -DCMAKE_BUILD_TYPE=Debug
-cmake --build build/preview
+Interactive linear rebase and Git LFS transfers use an explicitly selected Git executable on supported desktops. A commit can be signed by an application-supplied signer. See the [technical design](docs/lib-git-technical-design.md) for operation contracts and platform requirements.
+
+## Integration
+
+Use HuxerUI SDK 0.5.5 with its matching toolchain and C++20. After creating your application target, acquire Lib-Git with either form below.
+
+### Pin by tag
+
+Set `LIB_GIT_TAG` to a plain Git tag name from the Lib-Git repository.
+
+```cmake
+huxerui_use_library(your_app
+    TARGET HuxerUI::Git
+    URL "https://github.com/HuxerUI/Lib-Git.git"
+    TAG "${LIB_GIT_TAG}"
+)
 ```
 
-On macOS, open `build/preview/example_git.app`. From the opening screen, choose a local repository, clone into a new directory, or initialize one. App storage fills in a path under the application's durable data directory. In History, select a branch or enter a revision to inspect a commit and its changed files. Unified and side-by-side diffs show all hunks in one scrollable view, with horizontal scrolling for long lines. In Changes, stage files, hunks, or lines and use Review staged before committing. Identity sets the author name and email for that repository.
+### Pin by commit
 
-The preview restores recent repositories and open tabs from its application data directory. A moved repository or expired grant can be located again from the affected tab. Select a branch to filter history, or open its action menu with a secondary click, the More button, or the keyboard context-menu command. Pull and Push show the reviewed endpoints before starting. Command is the primary shortcut modifier on macOS and Control is the primary modifier on Windows and Linux. Use Primary+O to open the chooser, Primary+1 through Primary+3 to change views, and Primary+L to focus the revision field. [Desktop interaction design](docs/git-preview-interaction-design.md)
+Set `LIB_GIT_COMMIT` to the full 40-character SHA of the revision you want to build.
 
-Build the iOS simulator and Android debug shells from `examples/preview`. For iOS, use the device selector reported by `huxerui devices`.
-
-```sh
-huxerui build ios --build-system cmake --device "$SIMULATOR_ID" --config debug
-huxerui build android --build-system cmake --abi arm64-v8a --config debug
+```cmake
+huxerui_use_library(your_app
+    TARGET HuxerUI::Git
+    URL "https://github.com/HuxerUI/Lib-Git.git"
+    COMMIT "${LIB_GIT_COMMIT}"
+)
 ```
 
-Enable SSH with `-DHUXERUI_GIT_SSH=libssh2` and a compatible libssh2 installation, or select the libgit2 OpenSSH transport on a supported desktop. HTTPS uses the selected libgit2 TLS provider. The default Android CMake build links Mbed TLS 3.6.7 and loads Android's system CA directory. [Mbed TLS release and checksum](https://github.com/Mbed-TLS/mbedtls/releases/tag/mbedtls-3.6.7)
+### Register the application service
 
-For mcpp, the manifest resolves the sibling HuxerUI source checkout. Point `HUXERUI_GIT_LIBGIT2_PREFIX` at libgit2 1.9.7 installed for the selected mcpp target, including its static archive, public headers, and pkg-config metadata. The HuxerUI rules generate the module from the public headers.
+Register `huxerui::git::Install` to resolve `GitService` using `UseService`. Applications can also construct the service directly. `App` is your root view function.
 
-```sh
-HUXERUI_GIT_LIBGIT2_PREFIX=/path/to/target/libgit2 mcpp build
+```cpp
+#include <huxerui/git.h>
+#include <huxerui/huxerui.h>
+
+huxerui::View App();
+
+const huxerui::Application application{
+    App,
+    {.application_hooks = {huxerui::git::Install}},
+};
 ```
 
-## Validation and support
+## Open a repository
 
-```sh
-cmake -S . -B build/library -G Ninja -DHUXERUI_GIT_BUILD_TESTS=ON
-cmake --build build/library
-ctest --test-dir build/library --output-on-failure
-python3 tests/large_history.py build/library/huxerui_git_repository_test "$(command -v git)"
+Run Git tasks through a live HuxerUI `TaskScope`. Blocking Git work runs on library workers and the awaiting task resumes on its application thread.
+
+```cpp
+namespace git = huxerui::git;
+
+huxerui::Task<git::GitResult<git::StatusSnapshot>> ReadStatus(
+    git::GitService service, huxerui::File directory) {
+  auto opened = co_await service.OpenAsync(std::move(directory));
+  if (!opened.Succeeded()) {
+    co_return git::GitResult<git::StatusSnapshot>::Failure(opened.Error());
+  }
+  co_return co_await opened.Value().StatusAsync();
+}
 ```
 
-The tests use temporary repositories, the installed Git executable, and the HuxerUI windowless fixture. The loopback Smart HTTP test drops a receive-pack response after the remote applies the update, then checks the actual remote ref. Tests cover selective index updates, stale reviews, guarded integration after an external HEAD change, signed-object round trips, local push and clone, branch menus, conflict resolution, and workspace restoration with a linked worktree and a missing path. If `git-lfs` is available, the repository test also exercises an upload to a local bare remote. The large-history fixture opens 100,000 linear commits and scrolls the graph.
+`DiscoverAsync()` finds a repository above a starting directory. Repository handles retain any directory grant used to open them. URI-only providers require an application-accessible local repository before Git can work with it.
 
-- macOS arm64 is the tested desktop build. A separate mcpp consumer imported and linked `huxerui.git` on the same target. The iOS arm64 simulator and Android arm64 debug apps have been built, installed, and launched. Mobile remote transport and prolonged filesystem access require device validation. Windows and Linux have CMake entry points and need runtime and packaging tests. The Web capability reports local repository processing unavailable.
-- The preview refreshes status and reference changes when its window becomes active, and Refresh reloads the current local review. A filesystem watcher for live updates while the window stays active remains a release gate.
-- Interactive linear rebase and Git LFS transfer commands have an explicit Git executable backend on macOS and Linux. Commands use the installed executable and require trusted repository configuration. Git LFS requires the installed extension. Full LFS file-filter and locking workflows, merge-preserving interactive rebase, and Windows CLI parity remain release gates.
-- The public signing callback accepts exact commit bytes and verifies the review again before publication. The application supplies the signer and any trust verification. A repository requiring unsupported hooks or filters receives an explicit error from the libgit2 workflow.
+Queries return `GitResult<T>`. Writes return typed outcomes with a `WriteReport` and the observed effects. Use the staging snapshot from `ReadPatchAsync()` for hunk or line edits. Commit and amend use a reviewed HEAD and index token. Stale review tokens fail before publication.
 
-Lib-Git is MIT licensed. Its bundled libgit2 dependency uses the GPLv2 with a linking exception. [libgit2 license and exception](https://github.com/libgit2/libgit2/blob/v1.9.7/COPYING)
+## Remote transfers and credentials
+
+`StartClone()`, `StartFetch()`, `StartPull()`, and `StartPush()` admit a job and return a `Transfer` handle. Use `Observe()` to deliver progress to an application scope and `WaitAsync()` for the outcome. `RequestStop()` requests a cooperative stop. Inspect the write effects before retrying an interrupted operation.
+
+Supply a synchronous `CredentialProvider` when constructing `GitService` to resolve credentials automatically. The request carries the operation, canonical local Git directory and remote name when available, and the actual endpoint's authentication challenge. The provider runs on a worker and may be called concurrently.
+
+```cpp
+std::optional<git::Credential> FindAccount(const git::CredentialRequest& request);
+
+void InstallGit(huxerui::ApplicationContext& context) {
+  context.Provide(std::make_shared<git::GitService>(FindAccount));
+}
+```
+
+The application implements `FindAccount` using its saved accounts. Lib-Git attempts one automatic lookup per endpoint during a transfer. Return `std::nullopt` when there is no match. A missing or rejected credential allows manual entry through `Transfer::AnswerAuth()` while attempts remain.
+
+The application chooses the pull integration mode, explicit push update policy, and authorization for worktree overwrites. Pull defaults to fast-forward only and push defaults to normal ref updates.
+
+## Platform support
+
+| Feature | macOS | Windows | Linux | iOS | Android | Web |
+| --- | --- | --- | --- | --- | --- | --- |
+| Discover, open, initialize, and clone local repositories | Yes | Yes | Yes | Yes | Yes | No |
+| Read history, refs, status, diffs, and blame | Yes | Yes | Yes | Yes | Yes | No |
+| Stage and unstage files, hunks, and lines | Yes | Yes | Yes | Yes | Yes | No |
+| Commit, amend, restore, switch branches, and reset | Yes | Yes | Yes | Yes | Yes | No |
+| Merge, linear rebase, cherry-pick, revert, and resolve conflicts | Yes | Yes | Yes | Yes | Yes | No |
+| Manage branches, tags, remotes, stashes, submodules, and worktrees | Yes | Yes | Yes | Yes | Yes | No |
+| Sign commits with an application-supplied signer | Yes | Yes | Yes | Yes | Yes | No |
+| Clone, fetch, pull, and push over HTTPS | With TLS backend | With TLS backend | With TLS backend | With TLS backend | With TLS backend | No |
+| Clone, fetch, pull, and push over SSH | With SSH backend | With SSH backend | With SSH backend | With SSH backend | With SSH backend | No |
+| Shallow clone and fetch | Transport-dependent | Transport-dependent | Transport-dependent | Transport-dependent | Transport-dependent | No |
+| Interactive linear rebase | With Git | No | With Git | No | No | No |
+| Git LFS transfers | With Git and git-lfs | No | With Git and git-lfs | No | No | No |
+| Saved HTTPS credentials in Preview | Keychain | No | No | Keychain | No | No |
+
+Repository access requires an application-accessible local path, including when opening through a `FileReference`. URI-only Android document providers require a local copy.
+
+Use `GitService::GetCapabilities()` to check available library features at runtime. SSH is disabled by default for bundled libgit2. The application-supplied credential provider works with supported transports on each desktop and mobile platform.
+
+## Preview and tests
+
+The [Preview application](examples/preview) demonstrates repository tabs, a virtualized history graph, unified and side-by-side diffs, selective staging, conflict resolution, workspace restoration, and remote synchronization. Use **Repository settings** to bind a saved account to a selected HTTPS remote on Apple platforms. Separate fetch and push URLs have separate bindings. **Remember in Keychain after successful sync** saves a manually entered credential after a successful transfer.
+
+The [test fixtures](tests) use temporary repositories and loopback remotes. They cover stale reviews, interrupted push recovery, distinct accounts at one HTTPS endpoint, manual authentication fallback, and large-history scrolling. The HTTPS fixture uses a temporary CA and runs with a TLS backend that accepts an explicit certificate file, such as OpenSSL.
+
+- [Architecture and operation contracts](docs/lib-git-technical-design.md)
+- [Preview interaction design](docs/git-preview-interaction-design.md)
+
+## License
+
+Lib-Git uses the [MIT License](LICENSE). The bundled libgit2 dependency uses GPLv2 with a linking exception. [libgit2 license](https://github.com/libgit2/libgit2/blob/v1.9.7/COPYING)

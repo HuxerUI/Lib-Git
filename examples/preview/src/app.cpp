@@ -1,6 +1,7 @@
 #include <huxerui/huxerui.h>
 #include <huxerui/git.h>
 
+#include "credentials.h"
 #include "workspace_session.h"
 
 #include <algorithm>
@@ -16,6 +17,14 @@ using namespace huxerui;
 namespace git = huxerui::git;
 
 namespace {
+
+#if defined(__APPLE__)
+constexpr KeyModifiers kPrimaryShortcut{.meta = true};
+constexpr std::string_view kRevisionShortcut = "⌘L";
+#else
+constexpr KeyModifiers kPrimaryShortcut{.control = true};
+constexpr std::string_view kRevisionShortcut = "Ctrl+L";
+#endif
 
 using Jobs = std::variant<git::Transfer<git::CloneOutcome>, git::Transfer<git::FetchOutcome>,
                           git::Transfer<git::PushOutcome>, git::Transfer<git::PullOutcome>,
@@ -171,6 +180,13 @@ struct UncertainPush {
   std::vector<std::string> destinations;
 };
 
+/// Holds a manually entered credential until the transfer confirms it worked.
+struct PendingCredential {
+  std::string endpoint;
+  std::string username;
+  std::string token;
+};
+
 struct Workspace {
   std::vector<std::shared_ptr<Tab>> tabs;
   std::size_t current = 0;
@@ -197,6 +213,8 @@ struct Workspace {
   TextEditingValue path;
   TextEditingValue username;
   TextEditingValue secret;
+  std::optional<PendingCredential> pending_credential;
+  bool remember_credential = false;
   RepositoryAction repository_action = RepositoryAction::Open;
   bool adding_repository = false;
   bool opening_repository = false;
@@ -273,6 +291,7 @@ std::string PhaseLabel(git::TransferPhase phase) {
     case git::TransferPhase::UpdatingReferences: return "Updating references";
     case git::TransferPhase::CheckingOut: return "Checking out files";
     case git::TransferPhase::AwaitingAuthentication: return "Authentication required";
+    case git::TransferPhase::ResolvingCredentials: return "Looking up saved credentials";
     case git::TransferPhase::Stopping: return "Stopping";
     case git::TransferPhase::Finished: return "Finished";
   }
@@ -992,6 +1011,12 @@ Task<void> TrackTransfer(std::shared_ptr<Workspace> workspace, std::shared_ptr<T
                          git::Transfer<Outcome> transfer, TaskScope app_tasks, Revision revision) {
   auto watch = transfer.Observe(app_tasks, [workspace, revision](git::TransferSnapshot update) {
     if (workspace->progress.id != update.id) return;
+    if (update.authentication && (!workspace->progress.authentication ||
+        workspace->progress.authentication->id != update.authentication->id)) {
+      workspace->secret = {};
+      workspace->pending_credential.reset();
+      workspace->remember_credential = false;
+    }
     workspace->progress = std::move(update);
     Changed(revision);
   });
@@ -1019,10 +1044,27 @@ Task<void> TrackTransfer(std::shared_ptr<Workspace> workspace, std::shared_ptr<T
       }
     }
   }
+  auto credential = std::exchange(workspace->pending_credential, {});
+  if (credential && result.report.Succeeded()) {
+    std::optional<git_preview::CredentialTarget> target;
+    if (tab) {
+      target = git_preview::CredentialTarget{tab->info->git_directory, workspace->transfer_remote, credential->endpoint};
+    } else if constexpr (std::same_as<Outcome, git::CloneOutcome>) {
+      if (result.repository) {
+        const auto info = co_await result.repository->InspectAsync();
+        if (info.Succeeded()) target = git_preview::CredentialTarget{info.Value().git_directory, "origin", credential->endpoint};
+      }
+    }
+    const auto saved = co_await RunWorker([](PendingCredential value, std::optional<git_preview::CredentialTarget> binding) {
+      return git_preview::SaveCredential(value.endpoint, value.username, value.token, binding);
+    }, std::move(*credential), std::move(target));
+    workspace->notice += saved.Succeeded() ? " · Account saved" : " · " + saved.Error().message;
+  }
   workspace->last_transfer = workspace->transfer_label + "\n" + workspace->notice;
   workspace->transfer.reset();
   workspace->progress = {};
   workspace->secret = {};
+  workspace->remember_credential = false;
   Changed(revision);
   if constexpr (std::same_as<Outcome, git::CloneOutcome>) {
     if (result.repository) co_await AttachRepository(workspace, *result.repository, revision);
@@ -1044,6 +1086,10 @@ void StartTransfer(std::shared_ptr<Workspace> workspace, std::shared_ptr<Tab> ta
   auto transfer = std::move(result).Value();
   workspace->progress = transfer.Snapshot();
   workspace->transfer = transfer;
+  workspace->username = {};
+  workspace->secret = {};
+  workspace->pending_credential.reset();
+  workspace->remember_credential = false;
   workspace->transfer_remote = tab ? tab->remote : std::string{};
   workspace->transfer_label = tab ? tab->name + " · " + label + " · " + tab->remote : std::move(label);
   workspace->notice.clear();
@@ -1493,11 +1539,6 @@ View HistoryPane(std::shared_ptr<Tab> tab, TaskScope tasks, Revision revision, b
       .OnSubmitted(find)
       .With(revision_focus, Frame{.width = compact ? std::nullopt : std::optional{search_width}, .height = search_height},
             Grow(compact ? 1.0F : 0.0F)).Key("revision-input");
-#if defined(__APPLE__)
-  constexpr std::string_view revision_shortcut = "⌘L";
-#else
-  constexpr std::string_view revision_shortcut = "Ctrl+L";
-#endif
   View search = std::move(input);
   if (!compact) {
     search = Stack {
@@ -1505,7 +1546,7 @@ View HistoryPane(std::shared_ptr<Tab> tab, TaskScope tasks, Revision revision, b
       Row {
         Glyph(WorkspaceIcon::Search),
         Spacer(),
-        CodeLabel(std::string(revision_shortcut), kMuted, 9.0F)
+        CodeLabel(std::string(kRevisionShortcut), kMuted, 9.0F)
             .With(Padding(EdgeInsets::Symmetric(4.0F, 2.0F)), Background(kSurface), CornerRadius(3.0F),
                   Border{.color = kBorder}),
       }.With(Frame{.width = search_width, .height = search_height}, Padding(EdgeInsets::Symmetric(7.0F, 0.0F)),
@@ -1788,6 +1829,102 @@ void EditBranchName(std::shared_ptr<Workspace> workspace, DialogHandle dialogs, 
   auto options = WorkspaceDialogOptions(workspace, dialogs, layer);
   *layer = dialogs.Show([=](DialogContext context) {
     return BranchNameDialog(context, workspace, title, details, initial, submit, accept, offer_switch);
+  }, std::move(options));
+}
+
+/// Edits one repository's saved HTTPS account binding.
+/// @param dialog Presentation owning the editors and in-flight storage requests.
+/// @param workspace Workspace whose shortcuts yield while the dialog is open.
+/// @param target Canonical repository directory, remote name, and effective HTTPS URL.
+/// @param revision Workspace update signal for the completion notice.
+[[huxerui::composable]]
+View CredentialBindingDialog(DialogContext dialog, std::shared_ptr<Workspace> workspace,
+                             git_preview::CredentialTarget target, Revision revision) {
+  const auto tasks = UseTaskScope();
+  const auto username = UseState(TextEditingValue{});
+  const auto secret = UseState(TextEditingValue{});
+  const auto working = UseState(true);
+  const auto issue = UseState(std::string{});
+  const auto bound = UseState(false);
+  const TextEditingValue name = username;
+  const TextEditingValue token = secret;
+  const std::string message = issue;
+  const bool busy = working;
+  const bool has_binding = bound;
+  Lifecycle([=] {
+    tasks.Launch([=]() -> Task<void> {
+      auto current = co_await RunWorker(git_preview::ReadCredentialBinding, target);
+      if (current.Succeeded()) {
+        bound = current.Value().has_value();
+        if (current.Value()) username = TextEditingValue::FromText(*current.Value());
+      } else {
+        issue = current.Error().message;
+      }
+      working = false;
+    });
+  }, target.repository.Path(), target.remote, target.endpoint);
+
+  const auto close = [=] {
+    workspace->modal_open = false;
+    dialog.Dismiss();
+  };
+  const auto save = [=](bool clear) {
+    if (static_cast<bool>(working)) return;
+    working = true;
+    issue = std::string{};
+    const TextEditingValue entered_user = username;
+    const TextEditingValue entered_token = secret;
+    secret = TextEditingValue{};
+    tasks.Launch([=]() -> Task<void> {
+      auto result = co_await RunWorker([](const git_preview::CredentialTarget& destination, bool remove,
+                                        const std::string& user, const std::string& password) {
+        if (remove) return git_preview::ClearCredentialBinding(destination);
+        return git_preview::SaveCredential(destination.endpoint, user, password, destination);
+      }, target, clear, entered_user.text, entered_token.text);
+      if (!result.Succeeded()) {
+        issue = result.Error().message;
+        working = false;
+        co_return;
+      }
+      workspace->notice = clear ? "Remote account binding cleared" : "Remote account saved in Keychain";
+      Changed(revision);
+      close();
+    });
+  };
+  return Column {
+    SingleLine("Remote credentials", kText, 19.0F, FontWeight::SemiBold),
+    Row {
+      Badge(target.remote),
+      CodeLabel(target.endpoint).With(Grow()),
+    }.With(Spacing(7.0F), CrossAlign(CrossAxisAlignment::Center)),
+    TextField(name).Label("Username").Variant(TextFieldVariant::Outlined).With(Enabled(!busy))
+        .OnChanged([username](const TextEditingValue& value) { username = value; }),
+    TextField(token).Label("Token").Secure().Variant(TextFieldVariant::Outlined).With(Enabled(!busy))
+        .OnChanged([secret](const TextEditingValue& value) { secret = value; }),
+    Text("Leave the token blank to bind an account already saved for this address.")
+        .With(Foreground(kMuted), FontSize(12.0F)),
+    message.empty() ? View{} : Text(message).With(Foreground(kNegative), FontSize(12.0F)),
+    Flow {
+      Button("Cancel").With(Enabled(!busy)).OnClick(close),
+      has_binding ? Button("Clear binding").With(Enabled(!busy)).OnClick([=] { save(true); }) : View{},
+      PrimaryAction("Save binding", [=] { save(false); }, !busy && !name.text.empty()),
+    }.With(Spacing(6.0F)),
+  }.With(Frame{.width = 420.0F}, Padding(18.0F), Spacing(10.0F), CrossAlign(CrossAxisAlignment::Stretch),
+         Background(kSurface), CornerRadius(10.0F), Border{.color = kBorder},
+         Shadow{.color = Color::Rgb(20, 31, 52, 0.20F), .offset = {0.0F, 5.0F}, .blur_radius = 22.0F});
+}
+
+/// Opens the account settings for one direction of a named remote.
+/// @param workspace Workspace for dialog lifecycle and status.
+/// @param dialogs Presentation service for the current window.
+/// @param target Exact scope of the binding to edit.
+/// @param revision Workspace update signal for the completion notice.
+void EditCredentialBinding(std::shared_ptr<Workspace> workspace, DialogHandle dialogs,
+                           git_preview::CredentialTarget target, Revision revision) {
+  const auto layer = std::make_shared<LayerId>();
+  auto options = WorkspaceDialogOptions(workspace, dialogs, layer);
+  *layer = dialogs.Show([=](DialogContext context) {
+    return CredentialBindingDialog(context, workspace, target, revision);
   }, std::move(options));
 }
 
@@ -2102,7 +2239,21 @@ View Sidebar(std::shared_ptr<Workspace> workspace, std::shared_ptr<Tab> tab, std
   View settings;
   if (tab->edit_repository) {
     const auto target = tab->info ? tab->info->head.target : std::nullopt;
+    const auto remote_name = tab->remote;
+    const auto remote = std::ranges::find(tab->remotes, remote_name, &git::RemoteInfo::name);
+    const auto credentials_button = [=](std::string label, const std::string& endpoint) -> View {
+      if (!git_preview::CanSaveCredential(endpoint)) return {};
+      return Button(std::move(label)).With(Enabled(!workspace->transfer)).OnClick([=] {
+        EditCredentialBinding(workspace, dialogs, {tab->info->git_directory, remote_name, endpoint}, revision);
+      });
+    };
     settings = Column {
+      remote == tab->remotes.end() ? View{} : remote->fetch_url == remote->push_url
+          ? credentials_button(remote->name + " credentials…", remote->fetch_url)
+          : View(Column {
+                credentials_button(remote->name + " fetch credentials…", remote->fetch_url),
+                credentials_button(remote->name + " push credentials…", remote->push_url),
+              }.With(Spacing(4.0F), CrossAlign(CrossAxisAlignment::Stretch))),
       TextField(tab->new_branch).Label("New branch").OnChanged([=](const TextEditingValue& value) {
         tab->new_branch = value;
         Changed(revision);
@@ -2655,38 +2806,68 @@ View ReviewPane(std::shared_ptr<Tab> tab, TaskScope tasks, Revision revision, bo
   return PatchPane(tab, tasks, revision, compact);
 }
 
-View TransferPane(std::shared_ptr<Workspace> workspace, Revision revision) {
+View TransferPane(std::shared_ptr<Workspace> workspace, TaskScope tasks, Revision revision) {
   if (!workspace->transfer) return {};
   const auto snapshot = workspace->progress;
   View auth;
   if (snapshot.authentication) {
     const auto challenge = *snapshot.authentication;
+    const auto mask = [](git::CredentialKind kind) { return static_cast<unsigned>(kind); };
+    const auto kind = challenge.allowed & mask(git::CredentialKind::UserPassword)
+        ? git::CredentialKind::UserPassword : challenge.allowed & mask(git::CredentialKind::SshAgent)
+        ? git::CredentialKind::SshAgent : git::CredentialKind::Username;
+    const bool can_save = kind == git::CredentialKind::UserPassword && git_preview::CanSaveCredential(challenge.endpoint);
+    const auto answer = [=](git::Credential credential, bool remember) {
+      if (!workspace->transfer || !workspace->progress.authentication ||
+          workspace->progress.authentication->id != challenge.id) return;
+      workspace->pending_credential.reset();
+      if (remember) {
+        workspace->pending_credential = PendingCredential{challenge.endpoint, credential.username, credential.secret};
+      }
+      workspace->secret = {};
+      const auto result = std::visit([&](const auto& job) {
+        return job.AnswerAuth(challenge.id, std::move(credential));
+      }, *workspace->transfer);
+      if (!result.Succeeded()) {
+        workspace->pending_credential.reset();
+        workspace->notice = result.Error().message;
+      }
+      Changed(revision);
+    };
     auth = Column {
       SingleLine(challenge.endpoint, kMuted),
+      challenge.rejected ? SingleLine("The last credential was rejected. Try another account or token.", kWarning, 12.0F) : View{},
       Flow {
         TextField(workspace->username).Label("Username").Placeholder(challenge.username)
             .With(Frame{.min_width = 130.0F}).OnChanged([=](const TextEditingValue& value) {
               workspace->username = value;
               Changed(revision);
             }),
-        TextField(workspace->secret).Label("Token or password").Secure().With(Frame{.min_width = 130.0F})
-            .OnChanged([=](const TextEditingValue& value) { workspace->secret = value; Changed(revision); }),
+        kind == git::CredentialKind::UserPassword
+            ? TextField(workspace->secret).Label("Token or password").Secure().With(Frame{.min_width = 130.0F})
+                  .OnChanged([=](const TextEditingValue& value) { workspace->secret = value; Changed(revision); })
+            : View{},
+        can_save ? Button("Use saved account").With(Enabled(!workspace->username.text.empty())).OnClick([=] {
+          auto request = git::CredentialRequest{.challenge = challenge};
+          request.challenge.username = workspace->username.text;
+          tasks.Launch([=]() -> Task<void> {
+            auto credential = co_await RunWorker(git_preview::FindSavedCredential, request);
+            if (!workspace->progress.authentication || workspace->progress.authentication->id != challenge.id) co_return;
+            if (credential) {
+              answer(std::move(*credential), workspace->remember_credential);
+            } else {
+              workspace->notice = "No saved token is available for this account";
+              Changed(revision);
+            }
+          });
+        }) : View{},
         PrimaryAction("Authenticate", [=] {
-          if (!workspace->transfer) return;
-          const auto mask = [](git::CredentialKind kind) { return static_cast<unsigned>(kind); };
-          const auto kind = challenge.allowed & mask(git::CredentialKind::UserPassword)
-              ? git::CredentialKind::UserPassword : challenge.allowed & mask(git::CredentialKind::SshAgent)
-              ? git::CredentialKind::SshAgent : git::CredentialKind::Username;
-          git::Credential credential{kind, workspace->username.text.empty() ? challenge.username : workspace->username.text,
-                                     std::move(workspace->secret.text)};
-          workspace->secret = {};
-          const auto result = std::visit([&](const auto& job) {
-            return job.AnswerAuth(challenge.id, std::move(credential));
-          }, *workspace->transfer);
-          if (!result.Succeeded()) workspace->notice = result.Error().message;
-          Changed(revision);
-        }),
+          answer({kind, workspace->username.text.empty() ? challenge.username : workspace->username.text,
+                  std::move(workspace->secret.text)}, can_save && workspace->remember_credential);
+        }, kind != git::CredentialKind::UserPassword || !workspace->secret.text.empty()),
       }.With(Spacing(6.0F), CrossAlign(CrossAxisAlignment::Center)),
+      can_save ? Checkbox("Remember in Keychain after successful sync", workspace->remember_credential)
+          .OnChanged([=](bool value) { workspace->remember_credential = value; Changed(revision); }) : View{},
     }.With(Spacing(5.0F), CrossAlign(CrossAxisAlignment::Stretch));
   }
   return Column {
@@ -3112,20 +3293,15 @@ View WorkspaceContent(std::optional<File> explicit_session, bool use_app_storage
     SelectPage(current, page, tasks, revision);
     return true;
   };
-#if defined(__APPLE__)
-  constexpr KeyModifiers primary{.meta = true};
-#else
-  constexpr KeyModifiers primary{.control = true};
-#endif
   const auto shortcut_allowed = [workspace] { return !workspace->modal_open && !workspace->menu_open; };
   const auto open = [=] {
     if (!shortcut_allowed()) return false;
     ShowRepositoryChooser(workspace, revision);
     return true;
   };
-  window.OnShortcut(Key::O, primary, open, workspace);
-  window.OnShortcut(Key::T, primary, open, workspace);
-  window.OnShortcut(Key::W, primary, [=] {
+  window.OnShortcut(Key::O, kPrimaryShortcut, open, workspace);
+  window.OnShortcut(Key::T, kPrimaryShortcut, open, workspace);
+  window.OnShortcut(Key::W, kPrimaryShortcut, [=] {
     if (!shortcut_allowed()) return false;
     if (workspace->adding_repository && CurrentTab(*workspace)) {
       ActivateTab(workspace, CurrentTab(*workspace), service, tasks, revision);
@@ -3136,16 +3312,19 @@ View WorkspaceContent(std::optional<File> explicit_session, bool use_app_storage
     CloseTab(workspace, current, service, dialogs, tasks, revision);
     return true;
   }, workspace);
-  window.OnShortcut(Key::Digit1, primary, [=] { return shortcut_allowed() && navigate(WorkspacePage::History); }, workspace);
-  window.OnShortcut(Key::Digit2, primary, [=] { return shortcut_allowed() && navigate(WorkspacePage::Changes); }, workspace);
-  window.OnShortcut(Key::Digit3, primary, [=] { return shortcut_allowed() && navigate(WorkspacePage::Conflicts); }, workspace);
-  window.OnShortcut(Key::L, primary, [=] {
+  window.OnShortcut(Key::Digit1, kPrimaryShortcut,
+                    [=] { return shortcut_allowed() && navigate(WorkspacePage::History); }, workspace);
+  window.OnShortcut(Key::Digit2, kPrimaryShortcut,
+                    [=] { return shortcut_allowed() && navigate(WorkspacePage::Changes); }, workspace);
+  window.OnShortcut(Key::Digit3, kPrimaryShortcut,
+                    [=] { return shortcut_allowed() && navigate(WorkspacePage::Conflicts); }, workspace);
+  window.OnShortcut(Key::L, kPrimaryShortcut, [=] {
     if (!shortcut_allowed() || !navigate(WorkspacePage::History)) return false;
     workspace->focus_revision = true;
     Changed(revision);
     return true;
   }, workspace);
-  window.OnShortcut(Key::R, primary, [=] {
+  window.OnShortcut(Key::R, kPrimaryShortcut, [=] {
     if (!shortcut_allowed()) return false;
     const auto current = workspace->adding_repository ? nullptr : CurrentTab(*workspace);
     if (!current || !current->hydrated || current->busy || workspace->transfer) return false;
@@ -3314,7 +3493,7 @@ View WorkspaceContent(std::optional<File> explicit_session, bool use_app_storage
     RepositoryTabs(workspace, service, dialogs, tasks, revision, compact),
     Divider(),
     toolbar,
-    TransferPane(workspace, revision),
+    TransferPane(workspace, tasks, revision),
     body,
     Divider(),
     WorkspaceStatus(workspace, tab, dialogs),
@@ -3342,6 +3521,6 @@ const Application application{
         },
         .viewport_breakpoints = {.medium_width = 690.0F, .expanded_width = 1080.0F},
         .show_debug_overlay = false,
-        .application_hooks = {git::Install},
+        .application_hooks = {git_preview::InstallGit},
     }
 };

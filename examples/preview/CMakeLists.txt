@@ -46,6 +46,10 @@ huxerui_add_app(example_git
 
 huxerui_configure_project_app(example_git)
 
+if (APPLE AND NOT IOS AND NOT HUXERUI_LIBRARY_GRAPH_ONLY)
+    target_link_libraries(example_git PRIVATE "-framework Security")
+endif ()
+
 huxerui_use_library(example_git
         TARGET HuxerUI::Git
         PATH "${CMAKE_CURRENT_SOURCE_DIR}/../.."

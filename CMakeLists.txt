@@ -162,7 +162,12 @@ if (HUXERUI_GIT_BUILD_TESTS)
     endif ()
     find_package(Git REQUIRED)
     add_executable(huxerui_git_repository_test tests/repository.cpp examples/preview/src/app.cpp
-                   examples/preview/src/workspace_session.cpp)
+                   examples/preview/src/workspace_session.cpp examples/preview/src/credentials.cpp)
+    target_include_directories(huxerui_git_repository_test SYSTEM PRIVATE
+                               "$<TARGET_PROPERTY:libgit2,INTERFACE_INCLUDE_DIRECTORIES>")
+    if (APPLE)
+        target_link_libraries(huxerui_git_repository_test PRIVATE "-framework Security")
+    endif ()
     if (TARGET HuxerUI::huxerui_static)
         set(HUXERUI_GIT_TEST_CORE HuxerUI::huxerui_static)
     else ()
@@ -171,10 +176,6 @@ if (HUXERUI_GIT_BUILD_TESTS)
     target_compile_definitions(huxerui_git_repository_test PRIVATE
             GIT_TEST_EXECUTABLE="${GIT_EXECUTABLE}"
             GIT_TEST_RESOURCE_PACKAGE="$<TARGET_PROPERTY:${HUXERUI_GIT_TEST_CORE},HUXERUI_RESOURCE_PACKAGE>")
-    find_program(HUXERUI_GIT_TEST_LFS git-lfs)
-    if (HUXERUI_GIT_TEST_LFS)
-        target_compile_definitions(huxerui_git_repository_test PRIVATE HUXERUI_GIT_TEST_HAS_LFS=1)
-    endif ()
     target_link_libraries(huxerui_git_repository_test PRIVATE HuxerUI::Git HuxerUI::testing)
     huxerui_enable_codegen(huxerui_git_repository_test)
     add_test(NAME huxerui_git_repository COMMAND huxerui_git_repository_test)
@@ -184,5 +185,12 @@ if (HUXERUI_GIT_BUILD_TESTS)
                 COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/smart_http.py"
                         "$<TARGET_FILE:huxerui_git_repository_test>" "${GIT_EXECUTABLE}")
         set_tests_properties(huxerui_git_smart_http PROPERTIES TIMEOUT 60)
+        find_program(HUXERUI_GIT_TEST_OPENSSL openssl)
+        if (HUXERUI_GIT_TEST_OPENSSL)
+            add_test(NAME huxerui_git_credentials
+                    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/smart_http.py"
+                            "$<TARGET_FILE:huxerui_git_repository_test>" "${GIT_EXECUTABLE}" "${HUXERUI_GIT_TEST_OPENSSL}")
+            set_tests_properties(huxerui_git_credentials PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
+        endif ()
     endif ()
 endif ()

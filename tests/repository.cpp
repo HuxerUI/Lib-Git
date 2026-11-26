@@ -1,16 +1,19 @@
 #include <huxerui/git.h>
 #include <huxerui/huxerui.h>
 #include <huxerui/testing/ui_test.h>
+#include <git2.h>
 
 #include "../examples/preview/src/workspace_session.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <stdexcept>
 #include <thread>
 
@@ -24,6 +27,12 @@ View App();
 View PreviewWithSession(File file);
 
 namespace {
+
+#if defined(__APPLE__)
+constexpr KeyModifiers kPrimaryShortcut{.meta = true};
+#else
+constexpr KeyModifiers kPrimaryShortcut{.control = true};
+#endif
 
 std::optional<File> preview_session;
 
@@ -74,10 +83,18 @@ std::string Quoted(std::string_view text) {
 #endif
 }
 
-void RunGit(const fs::path& directory, std::string_view command) {
+/// Runs a fixture command with the Git executable selected for this test build.
+/// @param directory Working directory passed to Git.
+/// @param command Arguments for the fixture command.
+/// @return Whether the command exited successfully.
+bool TryRunGit(const fs::path& directory, std::string_view command) {
   const auto invocation = Quoted(GIT_TEST_EXECUTABLE) + " -C " + Quoted(directory.string()) + " " +
                           std::string(command);
-  Require(std::system(invocation.c_str()) == 0, "Fixture Git command failed: " + std::string(command));
+  return std::system(invocation.c_str()) == 0;
+}
+
+void RunGit(const fs::path& directory, std::string_view command) {
+  Require(TryRunGit(directory, command), "Fixture Git command failed: " + std::string(command));
 }
 
 void Write(const fs::path& path, std::string_view text) {
@@ -411,8 +428,7 @@ Task<void> Verify(Fixture& fixture) {
       Require(replayed.report.backend == git::Backend::GitCli && replayed.commit == topic,
               "The selected Git executable must execute the reviewed rebase todo");
     }
-#ifdef HUXERUI_GIT_TEST_HAS_LFS
-    if (service.GetCapabilities().git_lfs) {
+    if (service.GetCapabilities().git_lfs && TryRunGit(fixture.repository, "lfs version >/dev/null 2>&1")) {
       RunGit(fixture.repository, "lfs install --local");
       RunGit(fixture.repository, "lfs track " + Quoted("*.bin"));
       Write(fixture.repository / "asset.bin", std::string(4096, '\0'));
@@ -427,7 +443,6 @@ Task<void> Verify(Fixture& fixture) {
       auto objects = fixture.remote / "lfs" / "objects";
       Require(fs::exists(objects), "Git LFS must create the remote object directory");
     }
-#endif
   } catch (const std::exception& error) {
     fixture.failure = error.what();
   } catch (...) {
@@ -437,11 +452,6 @@ Task<void> Verify(Fixture& fixture) {
 }
 
 void VerifyPreview(const fs::path& repository, Fixture* fixture = nullptr) {
-#if defined(__APPLE__)
-  constexpr KeyModifiers primary{.meta = true};
-#else
-  constexpr KeyModifiers primary{.control = true};
-#endif
   const auto wide_line = "preview second edit " + std::string(180, 'x');
   if (fixture) {
     Write(repository / "notes.txt", Fixture::Text("preview first edit", wide_line));
@@ -495,7 +505,7 @@ void VerifyPreview(const fs::path& repository, Fixture* fixture = nullptr) {
   if (const auto end = initial.find_first_of("\r\n"); end != std::string::npos) initial.resize(end);
   const auto revision_input = ui.Find(testing::UiSelector::Key("revision-input"));
   wait(revision_input, "The desktop history toolbar must show its revision search");
-  ui.PressKey(Key::L, primary);
+  ui.PressKey(Key::L, kPrimaryShortcut);
   ui.Pump();
   Require(revision_input.One().focused, "The revision shortcut must focus the toolbar input");
   revision_input.ReplaceText(initial);
@@ -638,7 +648,7 @@ void VerifyPreview(const fs::path& repository, Fixture* fixture = nullptr) {
   menu_merge.Tap(mouse);
   wait(ui.Find(testing::UiSelector::Text("Merge into main?")), "The merge must show a destination confirmation");
   ui.Pump(250ms);
-  ui.PressKey(Key::O, primary);
+  ui.PressKey(Key::O, kPrimaryShortcut);
   Require(ui.Find(testing::UiSelector::Text("Merge into main?")).Exists() && !path.Exists(),
           "Workspace shortcuts must yield to the merge dialog");
   ui.Find(testing::UiSelector::Text("Merge")).Tap(mouse);
@@ -715,21 +725,184 @@ void VerifyPreviewRestore(Fixture& fixture) {
   const auto unavailable = ui.Find(testing::UiSelector::Key("repository-tab:missing-worktree"));
   unavailable.Tap();
   wait(ui.Find(testing::UiSelector::Text("Locate…")), "An unavailable restored repository must offer recovery");
-#if defined(__APPLE__)
-  constexpr KeyModifiers primary{.meta = true};
-#else
-  constexpr KeyModifiers primary{.control = true};
-#endif
-  ui.PressKey(Key::O, primary);
+  ui.PressKey(Key::O, kPrimaryShortcut);
   wait(ui.Find(testing::UiSelector::Text("Recent repositories")), "Open shortcut must show restored recent repositories");
-  ui.PressKey(Key::W, primary);
+  ui.PressKey(Key::W, kPrimaryShortcut);
   wait(ui.Find(testing::UiSelector::Text("Repository unavailable")), "Close shortcut must dismiss the add flow");
+}
+
+template <class Outcome>
+Task<git::AuthChallenge> WaitForManualAuth(git::Transfer<Outcome> transfer) {
+  for (int attempt = 0; attempt < 5000; ++attempt) {
+    const auto state = transfer.Snapshot();
+    if (state.authentication) co_return *state.authentication;
+    Require(state.phase != git::TransferPhase::Finished, "Transfer finished before offering manual authentication");
+    co_await Delay(2ms);
+  }
+  throw std::runtime_error("Timed out waiting for manual authentication");
+}
+
+Task<void> VerifyCredentials(Fixture& fixture, std::string target, std::string redirect) {
+  try {
+    const auto endpoint = target + "/remote.git";
+    const auto push_endpoint = target + "/push.git";
+    const auto fetch_url = redirect + "/remote.git";
+    const auto push_url = redirect + "/push.git";
+    const auto clone_path = fs::canonical(fixture.root) / "with-account";
+    const auto personal = (fs::canonical(fixture.repository) / ".git").generic_string();
+    const auto work = (clone_path / ".git").generic_string();
+    struct Lookups {
+      std::mutex mutex;
+      std::vector<git::CredentialRequest> requests;
+    };
+    const auto lookups = std::make_shared<Lookups>();
+    const auto account = [](std::string username) -> git::Credential {
+      auto token = username + "-token";
+      return {git::CredentialKind::UserPassword, std::move(username), std::move(token)};
+    };
+    const git::GitService service([=](const git::CredentialRequest& request) -> std::optional<git::Credential> {
+      {
+        std::scoped_lock lock(lookups->mutex);
+        lookups->requests.push_back(request);
+      }
+      if (request.operation == git::CredentialOperation::Clone) {
+        if (!request.repository && request.remote.empty() && request.challenge.endpoint == endpoint) {
+          return account("clone");
+        }
+        return {};
+      }
+      if (!request.repository || request.remote != "secure") return {};
+      const auto path = request.repository->Path();
+      if (request.operation == git::CredentialOperation::Push) {
+        if (path == personal && request.challenge.endpoint == push_endpoint) return account("publisher");
+        return {};
+      }
+      if (request.challenge.endpoint != endpoint) return {};
+      if (path == personal) return account("personal");
+      if (path == work) return account("work");
+      return {};
+    });
+    const auto first = Value(co_await service.OpenAsync(File(personal)));
+    Succeeded((co_await first.AddRemoteAsync("secure", fetch_url)).report);
+    Succeeded((co_await first.SetRemoteUrlAsync("secure", push_url, true)).report);
+    const auto first_head = Value(co_await first.InspectAsync()).head;
+
+    const auto push = Value(service.StartPush(first, {"secure", {{first_head.target, "refs/heads/main"}}}));
+    Succeeded((co_await push.WaitAsync()).report);
+    const auto clone = Value(service.StartClone({fetch_url, File(clone_path.generic_string())}));
+    const auto cloned = co_await clone.WaitAsync();
+    Succeeded(cloned.report);
+    Require(cloned.repository.has_value(), "Authenticated clone must open the repository");
+    const auto second = *cloned.repository;
+    const auto remotes = Value(co_await second.ListRemotesAsync());
+    Require(std::ranges::any_of(remotes, [&](const auto& remote) {
+      return remote.name == "origin" && remote.fetch_url == fetch_url;
+    }), "Clone must persist the configured URL for origin");
+    Succeeded((co_await second.AddRemoteAsync("secure", fetch_url)).report);
+    const auto fetch_personal = Value(service.StartFetch(first, {.remote = "secure"}));
+    const auto fetch_work = Value(service.StartFetch(second, {.remote = "secure"}));
+    Succeeded((co_await fetch_personal.WaitAsync()).report);
+    Succeeded((co_await fetch_work.WaitAsync()).report);
+    const auto personal_ref = co_await first.ResolveRevisionAsync("refs/remotes/secure/account-personal");
+    const auto work_ref = co_await second.ResolveRevisionAsync("refs/remotes/secure/account-work");
+    const auto personal_cross = co_await first.ResolveRevisionAsync("refs/remotes/secure/account-work");
+    const auto work_cross = co_await second.ResolveRevisionAsync("refs/remotes/secure/account-personal");
+    Require(personal_ref.Succeeded() && work_ref.Succeeded() && !personal_cross.Succeeded() && !work_cross.Succeeded(),
+            "Each repository must fetch only the refs visible to its own account at the shared endpoint");
+    const auto second_head = Value(co_await second.InspectAsync()).head;
+    const auto pull = Value(service.StartPull(second, {{.remote = "secure"}, second_head, "refs/remotes/secure/main"}));
+    Succeeded((co_await pull.WaitAsync()).report);
+    {
+      std::scoped_lock lock(lookups->mutex);
+      const auto& requests = lookups->requests;
+      Require(requests.size() == 5, "Each transfer should resolve the account once");
+      Require(std::ranges::count_if(requests, [&](const git::CredentialRequest& request) {
+        return request.operation == git::CredentialOperation::Fetch && request.challenge.endpoint == endpoint &&
+               request.remote == "secure" && request.repository && request.repository->Path() == personal;
+      }) == 1, "Fetch must identify the first repository for the shared endpoint");
+      Require(std::ranges::count_if(requests, [&](const git::CredentialRequest& request) {
+        return request.operation == git::CredentialOperation::Fetch && request.challenge.endpoint == endpoint &&
+               request.remote == "secure" && request.repository && request.repository->Path() == work;
+      }) == 1, "Fetch must identify the second repository for the shared endpoint");
+    }
+
+    const git::GitService missing([](const git::CredentialRequest&) { return std::optional<git::Credential>{}; });
+    const auto manual = Value(missing.StartFetch(first, {.remote = "secure"}));
+    const auto challenge = co_await WaitForManualAuth(manual);
+    Require(!challenge.rejected && challenge.endpoint == endpoint,
+            "A missing account should offer a fresh challenge at the redirect target");
+    Value(manual.AnswerAuth(challenge.id, account("manual")));
+    Succeeded((co_await manual.WaitAsync()).report);
+
+    const auto rejected_lookups = std::make_shared<std::atomic<int>>(0);
+    const git::GitService stale([=](const git::CredentialRequest&) -> std::optional<git::Credential> {
+      ++*rejected_lookups;
+      return git::Credential{git::CredentialKind::UserPassword, "work", "rejected-test-token"};
+    });
+    const auto fallback = Value(stale.StartFetch(second, {.remote = "secure"}));
+    const auto again = co_await WaitForManualAuth(fallback);
+    Require(again.rejected && again.endpoint == endpoint && *rejected_lookups == 1,
+            "A rejected saved token should offer manual authentication at the redirect target");
+    Value(fallback.AnswerAuth(again.id, account("work")));
+    Succeeded((co_await fallback.WaitAsync()).report);
+
+    struct LookupGate { std::atomic<bool> started{false}; std::atomic<bool> release{false}; };
+    auto gate = std::make_shared<LookupGate>();
+    const git::GitService slow([=](const git::CredentialRequest&) -> std::optional<git::Credential> {
+      gate->started = true;
+      const auto deadline = std::chrono::steady_clock::now() + 5s;
+      while (!gate->release && std::chrono::steady_clock::now() < deadline) std::this_thread::sleep_for(1ms);
+      return account("personal");
+    });
+    const auto stopping = Value(slow.StartFetch(first, {.remote = "secure"}));
+    for (int attempt = 0; attempt < 2000 && !gate->started; ++attempt) co_await Delay(2ms);
+    const auto pending = stopping.Snapshot();
+    const auto stopped = stopping.RequestStop();
+    gate->release = true;
+    Require(gate->started && stopped && pending.phase == git::TransferPhase::ResolvingCredentials &&
+                !pending.authentication,
+            "A running provider should hide the manual prompt and allow cancellation");
+    Require((co_await stopping.WaitAsync()).report.status == git::WriteStatus::Stopped,
+            "A late credential must not change a stopped transfer");
+  } catch (const std::exception& error) {
+    fixture.failure = error.what();
+  }
+  fixture.done = true;
+}
+
+int RunCredentialTests(std::string target, std::string redirect, const char* certificate) {
+  Require(git_libgit2_init() > 0, "Initialize libgit2 for the HTTPS fixture");
+  struct LibraryLifetime { ~LibraryLifetime() { git_libgit2_shutdown(); } } library;
+  if (git_libgit2_opts(GIT_OPT_SET_SSL_CERT_LOCATIONS, certificate, nullptr) < 0) {
+    std::cerr << "The configured TLS backend cannot use the fixture's temporary CA\n";
+    return 77;
+  }
+  Fixture fixture;
+  const Application app{[]() -> View { return Text("Credential integration"); }, {
+      .application_hooks = {[&](ApplicationContext&) {
+        UseApplicationTaskScope().Launch(VerifyCredentials(fixture, target, redirect));
+      }},
+  }};
+  {
+    testing::UiTest ui(app);
+    const auto deadline = std::chrono::steady_clock::now() + 35s;
+    while (!fixture.done && std::chrono::steady_clock::now() < deadline) {
+      ui.Pump(1ms);
+      std::this_thread::sleep_for(1ms);
+    }
+  }
+  Require(fixture.done, "Timed out waiting for credential operations");
+  Require(fixture.failure.empty(), fixture.failure);
+  return 0;
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
   try {
+    if (argc == 5 && std::string_view(argv[1]) == "--credentials") {
+      return RunCredentialTests(argv[2], argv[3], argv[4]);
+    }
     if (argc == 3 && std::string_view(argv[1]) == "--large-history") {
       VerifyPreview(argv[2]);
       return 0;

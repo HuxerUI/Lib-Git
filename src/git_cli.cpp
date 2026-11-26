@@ -1,33 +1,27 @@
 #include "git_internal.h"
 
-#include <array>
-#include <fstream>
-#include <set>
-#include <thread>
-
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
 #endif
 
 #if (defined(__APPLE__) && TARGET_OS_OSX) || (defined(__linux__) && !defined(__ANDROID__) && !defined(__EMSCRIPTEN__))
-#define HUXERUI_GIT_HAS_CLI 1
 #include <cerrno>
 #include <csignal>
 #include <fcntl.h>
+#include <fstream>
+#include <set>
 #include <spawn.h>
 #include <sys/wait.h>
+#include <thread>
 #include <unistd.h>
 #if defined(__APPLE__)
 #include <crt_externs.h>
 #else
 extern char** environ;
 #endif
-#endif
 
 namespace huxerui::git::detail {
 namespace {
-
-#ifdef HUXERUI_GIT_HAS_CLI
 
 std::string ShellPath(const File& file) {
   std::string quoted = "'";
@@ -223,21 +217,14 @@ void ReportRebase(git_repository* repo, int status, IntegrationOutcome& outcome)
   outcome.commit = ReadHead(repo).target;
 }
 
-#endif
-
 } // namespace
 
 bool GitCliSupported() noexcept {
-#ifdef HUXERUI_GIT_HAS_CLI
   return true;
-#else
-  return false;
-#endif
 }
 
 void RunLfs(git_repository* repo, const LfsRequest& request, const GitCliOptions& options,
-             std::stop_token stop, ChangeOutcome& outcome) {
-#ifdef HUXERUI_GIT_HAS_CLI
+            std::stop_token stop, ChangeOutcome& outcome) {
   outcome.report.backend = Backend::GitCli;
   RequireString(request.remote, "LFS remote");
   if (request.remote.starts_with('-') || request.remote.find_first_of("\r\n") != std::string::npos) {
@@ -265,78 +252,124 @@ void RunLfs(git_repository* repo, const LfsRequest& request, const GitCliOptions
   if (request.action == LfsAction::Pull) {
     outcome.worktree = WriteEffect::Changed;
   }
+}
+
+namespace {
+
+/// Validates the reviewed plan against HEAD before passing the todo to Git.
+/// @param repo Repository opened for the write.
+/// @param request Reviewed rebase plan.
+/// @param options Git executable, editor, and hook policy.
+/// @param stop Cancellation token for the Git process.
+/// @param outcome Backend and resulting rebase state.
+void RunInteractiveRebase(git_repository* repo, const InteractiveRebaseRequest& request,
+                          const GitCliOptions& options, std::stop_token stop, IntegrationOutcome& outcome) {
+  outcome.report.backend = Backend::GitCli;
+  if (Operation(repo)) {
+    Fail(ErrorCode::Busy, "Finish the current Git operation first");
+  }
+  if (!request.expected.target || request.expected != ReadHead(repo)) {
+    Fail(ErrorCode::StaleSnapshot, "HEAD changed after reviewing the rebase plan");
+  }
+  if (request.edits.empty()) {
+    Fail(ErrorCode::InvalidArgument, "Provide the reviewed rebase todo");
+  }
+  auto commits = ReplayedCommits(repo, request.expected, request.upstream);
+  std::string todo;
+  for (const auto& item : request.edits) {
+    const auto oid = Parse(item.commit);
+    auto hex = Id(&oid).hex;
+    if (commits.erase(hex) != 1) {
+      Fail(ErrorCode::StaleSnapshot, "The rebase plan includes a duplicate or a commit outside the replay range");
+    }
+    if ((item.action == RebaseAction::Reword || item.action == RebaseAction::Squash) && !options.editor) {
+      Fail(ErrorCode::InvalidArgument, "Choose a message editor for reword or squash");
+    }
+    todo += Action(item.action) + ' ' + hex + '\n';
+  }
+  if (!commits.empty()) {
+    Fail(ErrorCode::StaleSnapshot, "The rebase plan must account for every replayed commit");
+  }
+  const auto base = Parse(request.upstream);
+  TodoFile input(todo);
+  const int result = Run(repo, options,
+      {"rebase", "--interactive", "--no-autostash", "--no-autosquash", "--no-rebase-merges", "--reapply-cherry-picks",
+       Id(&base).hex}, stop, input.Path());
+  ReportRebase(repo, result, outcome);
+}
+
+/// Continues, skips, or aborts a Git CLI rebase after verifying the current operation.
+/// @param repo Repository opened for the write.
+/// @param expected Version of the operation the caller reviewed.
+/// @param action Rebase action requested by the caller.
+/// @param options Git executable, editor, and hook policy.
+/// @param stop Cancellation token for the Git process.
+/// @param outcome Backend and resulting rebase state.
+void RunRebaseControl(git_repository* repo, const OperationVersion& expected, RebaseControl action,
+                      const GitCliOptions& options, std::stop_token stop, IntegrationOutcome& outcome) {
+  outcome.report.backend = Backend::GitCli;
+  const auto active = ReadOperation(repo);
+  if (!active || active->version != expected) {
+    Fail(ErrorCode::StaleSnapshot, "The Git operation changed before the requested action");
+  }
+  if (active->backend != Backend::GitCli || active->kind != OperationKind::Rebase) {
+    Fail(ErrorCode::Unsupported, "The selected operation is not a Git CLI rebase");
+  }
+  const auto flag = action == RebaseControl::Continue ? "--continue" :
+                    action == RebaseControl::Skip ? "--skip" : "--abort";
+  ReportRebase(repo, Run(repo, options, {"rebase", flag}, stop), outcome);
+}
+
+} // namespace
+} // namespace huxerui::git::detail
+
 #else
-  Fail(ErrorCode::Unsupported, "This platform does not provide a Git executable backend");
-#endif
+
+namespace huxerui::git::detail {
+namespace {
+
+constexpr auto kCliUnavailable = "This platform does not provide a Git executable backend";
+
+void RunInteractiveRebase(git_repository*, const InteractiveRebaseRequest&, const GitCliOptions&,
+                          std::stop_token, IntegrationOutcome&) {
+  Fail(ErrorCode::Unsupported, kCliUnavailable);
+}
+
+void RunRebaseControl(git_repository*, const OperationVersion&, RebaseControl, const GitCliOptions&,
+                      std::stop_token, IntegrationOutcome&) {
+  Fail(ErrorCode::Unsupported, kCliUnavailable);
+}
+
+} // namespace
+
+bool GitCliSupported() noexcept {
+  return false;
+}
+
+void RunLfs(git_repository*, const LfsRequest&, const GitCliOptions&, std::stop_token, ChangeOutcome&) {
+  Fail(ErrorCode::Unsupported, kCliUnavailable);
 }
 
 } // namespace huxerui::git::detail
+
+#endif
 
 namespace huxerui::git {
 using namespace detail;
 
 Task<IntegrationOutcome> Repository::InteractiveRebaseAsync(InteractiveRebaseRequest request,
-                                                              GitCliOptions options) const {
+                                                            GitCliOptions options) const {
   return Write<IntegrationOutcome>(state_, [request = std::move(request), options = std::move(options)]
       (auto* repo, auto& outcome, auto stop) {
-#ifdef HUXERUI_GIT_HAS_CLI
-    outcome.report.backend = Backend::GitCli;
-    if (Operation(repo)) {
-      Fail(ErrorCode::Busy, "Finish the current Git operation first");
-    }
-    if (!request.expected.target || request.expected != ReadHead(repo)) {
-      Fail(ErrorCode::StaleSnapshot, "HEAD changed after reviewing the rebase plan");
-    }
-    if (request.edits.empty()) {
-      Fail(ErrorCode::InvalidArgument, "Provide the reviewed rebase todo");
-    }
-    auto commits = ReplayedCommits(repo, request.expected, request.upstream);
-    std::string todo;
-    for (const auto& item : request.edits) {
-      const auto oid = Parse(item.commit);
-      auto hex = Id(&oid).hex;
-      if (commits.erase(hex) != 1) {
-        Fail(ErrorCode::StaleSnapshot, "The rebase plan includes a duplicate or a commit outside the replay range");
-      }
-      if ((item.action == RebaseAction::Reword || item.action == RebaseAction::Squash) && !options.editor) {
-        Fail(ErrorCode::InvalidArgument, "Choose a message editor for reword or squash");
-      }
-      todo += Action(item.action) + ' ' + hex + '\n';
-    }
-    if (!commits.empty()) {
-      Fail(ErrorCode::StaleSnapshot, "The rebase plan must account for every replayed commit");
-    }
-    const auto base = Parse(request.upstream);
-    TodoFile input(todo);
-    const int result = Run(repo, options,
-        {"rebase", "--interactive", "--no-autostash", "--no-autosquash", "--no-rebase-merges", "--reapply-cherry-picks",
-         Id(&base).hex}, stop, input.Path());
-    ReportRebase(repo, result, outcome);
-#else
-    Fail(ErrorCode::Unsupported, "This platform does not provide a Git executable backend");
-#endif
+    RunInteractiveRebase(repo, request, options, stop, outcome);
   });
 }
 
 Task<IntegrationOutcome> Repository::ControlGitRebaseAsync(OperationVersion expected, RebaseControl action,
-                                                             GitCliOptions options) const {
+                                                           GitCliOptions options) const {
   return Write<IntegrationOutcome>(state_, [expected = std::move(expected), action, options = std::move(options)]
       (auto* repo, auto& outcome, auto stop) {
-#ifdef HUXERUI_GIT_HAS_CLI
-    outcome.report.backend = Backend::GitCli;
-    const auto active = ReadOperation(repo);
-    if (!active || active->version != expected) {
-      Fail(ErrorCode::StaleSnapshot, "The Git operation changed before the requested action");
-    }
-    if (active->backend != Backend::GitCli || active->kind != OperationKind::Rebase) {
-      Fail(ErrorCode::Unsupported, "The selected operation is not a Git CLI rebase");
-    }
-    const auto flag = action == RebaseControl::Continue ? "--continue" :
-                      action == RebaseControl::Skip ? "--skip" : "--abort";
-    ReportRebase(repo, Run(repo, options, {"rebase", flag}, stop), outcome);
-#else
-    Fail(ErrorCode::Unsupported, "This platform does not provide a Git executable backend");
-#endif
+    RunRebaseControl(repo, expected, action, options, stop, outcome);
   });
 }
 

@@ -973,9 +973,12 @@ private:
 };
 
 enum class TransferPhase { Queued, Connecting, Receiving, Packing, Sending, UpdatingReferences,
-                           CheckingOut, AwaitingAuthentication, Stopping, Finished };
+                           CheckingOut, AwaitingAuthentication, Stopping, Finished, ResolvingCredentials };
 
 enum class CredentialKind : unsigned { UserPassword = 1, SshKey = 2, SshAgent = 4, Username = 8, Default = 16 };
+
+/// Transfer that is asking for a credential.
+enum class CredentialOperation { Clone, Fetch, Pull, Push };
 
 /// Current request for authentication. The endpoint has been stripped of embedded secrets.
 struct AuthChallenge {
@@ -986,6 +989,8 @@ struct AuthChallenge {
   std::string username;
   /// Bitwise combination of the accepted CredentialKind values.
   unsigned allowed = 0;
+  /// A credential offered for this authentication step was rejected.
+  bool rejected = false;
 };
 
 /// An answer for the active challenge. A missing answer declines the request.
@@ -1000,6 +1005,22 @@ struct Credential {
   /// Required private key file for SshKey. The job requires access to the file during authentication.
   std::optional<File> private_key;
 };
+
+/// Context the application uses to select an account for a remote challenge.
+struct CredentialRequest {
+  CredentialOperation operation = CredentialOperation::Clone;
+  /// Canonical local Git directory. Absent during clone.
+  std::optional<File> repository;
+  /// Repository remote name. Empty during clone.
+  std::string remote;
+  /// Sanitized actual endpoint, suggested username, and permitted credential types.
+  AuthChallenge challenge;
+};
+
+/// Looks up a credential on a Git worker after the transport attempt has released its handles.
+/// Providers may run concurrently. Return promptly without accessing UI state or requesting user interaction.
+/// Return an empty optional when manual authentication is needed.
+using CredentialProvider = std::function<std::optional<Credential>(const CredentialRequest&)>;
 
 /// Owned progress and the current challenge. Counters are meaningful within the current phase.
 struct TransferSnapshot {
@@ -1176,6 +1197,12 @@ struct PullOutcome {
 /// Starts repository operations and owns admission to the blocking Git executors.
 class GitService {
 public:
+  GitService() = default;
+
+  /// @brief Enables automatic credential lookup for Clone, Fetch, Pull, and Push.
+  /// @param provider Resolves a challenge. An empty provider preserves manual authentication.
+  explicit GitService(CredentialProvider provider);
+
   /// @brief Reads the feature set compiled into this build.
   /// @return Capability flags independent of a repository's configuration, access grants, or remote transport.
   Capabilities GetCapabilities() const noexcept;
@@ -1253,6 +1280,9 @@ public:
   /// @return A Task yielding the advertisement. The remote may change after the query completes.
   Task<GitResult<std::vector<RefInfo>>> ReadRemoteRefsAsync(Repository repository, std::string remote,
                                                           std::optional<Credential> credential = {}) const;
+
+private:
+  std::shared_ptr<const CredentialProvider> credentials_;
 };
 
 /// @brief Registers GitService with a HuxerUI application.

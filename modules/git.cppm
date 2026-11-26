@@ -33,6 +33,9 @@ export namespace huxerui::git {
     using huxerui::git::ConflictSide;
     using huxerui::git::Credential;
     using huxerui::git::CredentialKind;
+    using huxerui::git::CredentialOperation;
+    using huxerui::git::CredentialProvider;
+    using huxerui::git::CredentialRequest;
     using huxerui::git::DeltaKind;
     using huxerui::git::DiffHunk;
     using huxerui::git::DiffKind;

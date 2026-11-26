@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <limits>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace huxerui::git::detail {
 
@@ -117,6 +118,8 @@ bool LocalTransport(const git_remote* remote, bool push) {
 struct ScopedCredential {
   Credential value;
   std::string endpoint;
+  bool automatic = false;
+  std::string redirected_from;
 };
 
 class TransferBase {
@@ -200,8 +203,10 @@ public:
   std::stop_source stop;
   std::optional<ScopedCredential> credential;
   std::optional<AuthChallenge> requested;
+  std::string redirected_from;
   unsigned attempts = 0;
   bool may_have_pushed = false;
+  bool can_resolve_credential = true;
 };
 
 struct RemoteCallbacks {
@@ -213,6 +218,35 @@ struct RemoteCallbacks {
   PushOutcome* push_result = nullptr;
   bool credential_used = false;
   bool allow_credentials = true;
+  std::string source_url;
+
+  /// Prepares a retry against the HTTPS endpoint that issued the challenge.
+  /// @param configured_url Current URL of the selected remote and direction.
+  /// @return The in-memory URL override, or null when the configured URL can be used.
+  const char* RetryUrl(std::string_view configured_url) {
+    source_url = configured_url;
+    allow_credentials = !configured_url.starts_with("http://");
+    if (!credential || credential->redirected_from.empty()) return nullptr;
+    if (configured_url != credential->redirected_from) {
+      Fail(ErrorCode::StaleSnapshot, "The remote URL changed during authentication");
+    }
+    return credential->endpoint.c_str();
+  }
+
+  /// Applies any retry URL to the selected direction of an in-memory remote.
+  /// @param remote Remote instance used for this attempt.
+  /// @param push Whether the operation uses the push URL.
+  void PrepareRemote(git_remote* remote, bool push) {
+    const auto* url = push ? git_remote_pushurl(remote) : nullptr;
+    if (const auto* retry = RetryUrl(url ? url : git_remote_url(remote))) {
+      Check(push ? git_remote_set_instance_pushurl(remote, retry) : git_remote_set_instance_url(remote, retry),
+            "Select the challenged HTTPS endpoint");
+    }
+  }
+
+  bool BlockOffsiteRedirects() const {
+    return credential && (credential->automatic || !credential->redirected_from.empty());
+  }
 
   template <class Work>
   int Invoke(Work work) noexcept {
@@ -240,7 +274,10 @@ struct RemoteCallbacks {
     }
     const auto permitted = CredentialMask(allowed);
     const auto endpoint = RedactUrl(address);
+    const bool https = address.starts_with("https://");
+    const bool clean_https = https && address == endpoint && address.find_first_of("\r\n") == std::string_view::npos;
     if (credential && !credential_used && credential->endpoint == endpoint &&
+        (!credential->automatic || !https || clean_https) &&
         (permitted & Mask(credential->value.kind))) {
       const auto& answer = credential->value;
       const char* user = answer.username.empty() ? username : answer.username.c_str();
@@ -269,7 +306,13 @@ struct RemoteCallbacks {
       }
     }
     if (job && permitted) {
-      job->requested = AuthChallenge{++next_challenge, endpoint, username ? username : "", permitted};
+      const bool rejected = credential_used && credential->endpoint == endpoint &&
+                            (permitted & Mask(credential->value.kind));
+      job->requested = AuthChallenge{++next_challenge, endpoint, username ? username : "", permitted, rejected};
+      job->can_resolve_credential = !https || clean_https;
+      // A sanitized URL is suitable for display but cannot replace the actual transport URL.
+      job->redirected_from = clean_https && source_url.starts_with("https://") && source_url != endpoint
+          ? source_url : std::string{};
     }
     return GIT_EAUTH;
   }
@@ -422,15 +465,23 @@ template <class Outcome> struct TransferState final : TransferBase, std::enable_
     }
 
     std::optional<std::pair<std::uint64_t, std::chrono::steady_clock::time_point>> waiting;
+    std::optional<CredentialRequest> lookup;
     {
       std::scoped_lock lock(mutex);
       if (!stopping && !may_have_pushed && requested && attempts < 3 &&
           outcome.report.issue && outcome.report.issue->code == ErrorCode::AuthenticationRequired) {
-        snapshot.authentication = std::move(requested);
-        snapshot.phase = TransferPhase::AwaitingAuthentication;
-        ++snapshot.revision;
         auth_deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
-        waiting.emplace(snapshot.authentication->id, auth_deadline);
+        waiting.emplace(requested->id, auth_deadline);
+        if (resolver && can_resolve_credential && !requested->rejected && looked_up.insert(requested->endpoint).second) {
+          resolving = std::move(requested);
+          lookup = credential_context;
+          lookup->challenge = *resolving;
+          snapshot.phase = TransferPhase::ResolvingCredentials;
+        } else {
+          snapshot.authentication = std::move(requested);
+          snapshot.phase = TransferPhase::AwaitingAuthentication;
+        }
+        ++snapshot.revision;
       }
     }
     if (waiting) {
@@ -441,18 +492,62 @@ template <class Outcome> struct TransferState final : TransferBase, std::enable_
         }
       });
       Emit();
+      if (lookup) QueueLookup(std::move(*lookup));
     } else {
       Finish(std::move(outcome));
     }
   }
 
+  /// Queues one owned provider request without holding a repository execution slot.
+  /// @param request Application context and the exact challenge to answer.
+  void QueueLookup(CredentialRequest request) {
+    auto weak = this->weak_from_this();
+    const auto id = request.challenge.id;
+    try {
+      Enqueue(nullptr, false, [weak, provider = resolver, request = std::move(request), id] {
+        if (auto job = weak.lock()) {
+          std::scoped_lock lock(job->mutex);
+          if (!job->resolving || job->resolving->id != id || job->stopping || job->result) return;
+        } else {
+          return;
+        }
+        std::optional<Credential> answer;
+        try {
+          answer = (*provider)(request);
+        } catch (...) {
+          // Provider diagnostics may include storage details. Leave authentication to the caller.
+        }
+        if (auto job = weak.lock()) job->CompleteLookup(id, std::move(answer));
+      });
+    } catch (...) {
+      CompleteLookup(id, {});
+    }
+  }
+
+  /// Submits the provider's answer or publishes the same challenge for manual entry.
+  /// @param id Challenge that owned the lookup.
+  /// @param answer Credential offered by the provider, if available.
+  void CompleteLookup(std::uint64_t id, std::optional<Credential> answer) {
+    if (answer && Answer(id, std::move(answer), true).Succeeded()) return;
+    {
+      std::scoped_lock lock(mutex);
+      if (!resolving || resolving->id != id || stopping || result) return;
+      snapshot.authentication = std::exchange(resolving, {});
+      snapshot.phase = TransferPhase::AwaitingAuthentication;
+      ++snapshot.revision;
+    }
+    Emit();
+  }
+
   void Expire(std::uint64_t id) {
     {
       std::scoped_lock lock(mutex);
-      if (!snapshot.authentication || snapshot.authentication->id != id || stopping || result) {
+      const auto& challenge = resolving ? resolving : snapshot.authentication;
+      if (!challenge || challenge->id != id || stopping || result) {
         return;
       }
       snapshot.authentication.reset();
+      resolving.reset();
     }
     Outcome outcome;
     outcome.report = Failed({ErrorCode::AuthenticationRequired, "Authentication request expired"});
@@ -469,6 +564,7 @@ template <class Outcome> struct TransferState final : TransferBase, std::enable_
       result = std::move(outcome);
       credential.reset();
       snapshot.authentication.reset();
+      resolving.reset();
       snapshot.phase = TransferPhase::Finished;
       ++snapshot.revision;
       receivers.swap(waiters);
@@ -486,7 +582,8 @@ template <class Outcome> struct TransferState final : TransferBase, std::enable_
       if (result || stopping.exchange(true)) {
         return false;
       }
-      waiting = snapshot.phase == TransferPhase::AwaitingAuthentication || snapshot.phase == TransferPhase::Queued;
+      waiting = snapshot.phase == TransferPhase::AwaitingAuthentication ||
+                snapshot.phase == TransferPhase::ResolvingCredentials || snapshot.phase == TransferPhase::Queued;
       snapshot.authentication.reset();
       snapshot.phase = TransferPhase::Stopping;
       ++snapshot.revision;
@@ -506,19 +603,24 @@ template <class Outcome> struct TransferState final : TransferBase, std::enable_
     return true;
   }
 
-  GitResult<void> Answer(std::uint64_t id, std::optional<Credential> answer) {
+  GitResult<void> Answer(std::uint64_t id, std::optional<Credential> answer, bool automatic = false) {
     bool declined = false;
     {
       std::scoped_lock lock(mutex);
-      if (!snapshot.authentication || snapshot.authentication->id != id || stopping || result) {
+      const auto& challenge = automatic ? resolving : snapshot.authentication;
+      if (!challenge || challenge->id != id || stopping || result) {
         return GitResult<void>::Failure({ErrorCode::StaleSnapshot, "This authentication request is no longer active"});
       }
       declined = !answer || std::chrono::steady_clock::now() > auth_deadline;
-      if (!declined && !(snapshot.authentication->allowed & Mask(answer->kind))) {
+      if (!declined && !(challenge->allowed & Mask(answer->kind))) {
         return GitResult<void>::Failure({ErrorCode::InvalidArgument, "Credential type is unavailable for this request"});
       }
       credential = declined ? std::nullopt
-                            : std::optional(ScopedCredential{std::move(*answer), snapshot.authentication->endpoint});
+                            : std::optional(ScopedCredential{std::move(*answer), challenge->endpoint, automatic,
+                                                             std::move(redirected_from)});
+      if (automatic) {
+        resolving.reset();
+      }
       snapshot.authentication.reset();
       snapshot.phase = TransferPhase::Queued;
       ++snapshot.revision;
@@ -543,6 +645,10 @@ template <class Outcome> struct TransferState final : TransferBase, std::enable_
   }
 
   std::shared_ptr<RepositoryGroup> group;
+  std::shared_ptr<const CredentialProvider> resolver;
+  CredentialRequest credential_context;
+  std::optional<AuthChallenge> resolving;
+  std::unordered_set<std::string> looked_up;
   Command command;
   std::optional<Outcome> result;
   std::uint64_t next_waiter = 0;
@@ -552,10 +658,14 @@ template <class Outcome> struct TransferState final : TransferBase, std::enable_
 namespace {
 
 template <class Outcome, class Work>
-std::shared_ptr<TransferState<Outcome>> Start(std::shared_ptr<RepositoryGroup> group, Work work) {
+std::shared_ptr<TransferState<Outcome>> Start(std::shared_ptr<RepositoryGroup> group, Work work,
+                                              std::shared_ptr<const CredentialProvider> resolver = {},
+                                              CredentialRequest context = {}) {
   auto state = std::make_shared<TransferState<Outcome>>();
   state->group = std::move(group);
   state->command = std::move(work);
+  state->resolver = std::move(resolver);
+  state->credential_context = std::move(context);
   state->Submit();
   return state;
 }
@@ -577,6 +687,7 @@ void ConfigureFetch(git_fetch_options& options, const FetchRequest& request, Rem
   options.depth = request.unshallow ? GIT_FETCH_DEPTH_UNSHALLOW : static_cast<int>(request.depth);
   options.prune = request.prune ? GIT_FETCH_PRUNE : GIT_FETCH_NO_PRUNE;
   options.callbacks = callbacks.Bind();
+  if (callbacks.BlockOffsiteRedirects()) options.follow_redirects = GIT_REMOTE_REDIRECT_NONE;
 }
 
 std::optional<ObjectId> AdvertisedUpstream(git_remote* remote, const FetchRequest& request,
@@ -620,7 +731,7 @@ std::optional<ObjectId> Fetch(git_repository* repo, TransferBase& job, const Fet
                               const std::string& tracking_ref = {}) {
   auto remote = OpenRemote(repo, request.remote);
   RemoteCallbacks callbacks{&job, job.TakeCredential()};
-  callbacks.allow_credentials = !std::string_view(git_remote_url(remote.get())).starts_with("http://");
+  callbacks.PrepareRemote(remote.get(), false);
   callbacks.fetched = &outcome.updated_references;
   auto strings = Strings(request.refspecs);
   git_strarray specs{strings.data(), strings.size()};
@@ -673,13 +784,13 @@ void Push(git_repository* repo, TransferBase& job, const PushRequest& request, P
     outcome.references.push_back({item.destination, RefPushStatus::NotAttempted, {}});
   }
   RemoteCallbacks callbacks{&job, job.TakeCredential()};
-  const auto* url = git_remote_pushurl(remote.get());
-  callbacks.allow_credentials = !std::string_view(url ? url : git_remote_url(remote.get())).starts_with("http://");
+  callbacks.PrepareRemote(remote.get(), true);
   callbacks.push = &request;
   callbacks.push_result = &outcome;
   git_push_options options = GIT_PUSH_OPTIONS_INIT;
   options.pb_parallelism = 1;
   options.callbacks = callbacks.Bind();
+  if (callbacks.BlockOffsiteRedirects()) options.follow_redirects = GIT_REMOTE_REDIRECT_NONE;
   auto strings = Strings(refs);
   git_strarray specs{strings.data(), strings.size()};
   const int result = git_remote_push(remote.get(), &specs, &options);
@@ -767,8 +878,16 @@ Repo Clone(TransferBase& job, const CloneRequest& request, const File& destinati
     Fail(ErrorCode::Busy, "Could not reserve a directory for clone");
   }
   RemoteCallbacks callbacks{&job, job.TakeCredential()};
-  callbacks.allow_credentials = !std::string_view(request.url).starts_with("http://");
   git_clone_options options = GIT_CLONE_OPTIONS_INIT;
+  if (callbacks.RetryUrl(request.url)) {
+    // Create origin with the requested URL and override only the connection for this attempt.
+    options.remote_cb = [](git_remote** out, git_repository* repo, const char* name, const char* url, void* payload) {
+      const auto& self = *static_cast<const RemoteCallbacks*>(payload);
+      const int code = git_remote_create(out, repo, name, url);
+      return code < 0 ? code : git_remote_set_instance_url(*out, self.credential->endpoint.c_str());
+    };
+    options.remote_cb_payload = &callbacks;
+  }
   options.bare = request.bare;
   options.checkout_opts.checkout_strategy = GIT_CHECKOUT_NONE;
   options.checkout_branch = request.branch ? request.branch->c_str() : nullptr;
@@ -866,6 +985,10 @@ GitResult<void> Transfer<Outcome>::AnswerAuth(std::uint64_t id, std::optional<Cr
   return state_->Answer(id, std::move(credential));
 }
 
+GitService::GitService(CredentialProvider provider) {
+  if (provider) credentials_ = std::make_shared<const CredentialProvider>(std::move(provider));
+}
+
 GitResult<Transfer<CloneOutcome>> GitService::StartClone(CloneRequest request) const {
   try {
     ValidateTransferUrl(request.url);
@@ -878,7 +1001,7 @@ GitResult<Transfer<CloneOutcome>> GitService::StartClone(CloneRequest request) c
     auto state = Start<CloneOutcome>(nullptr, [request = std::move(request)](auto& job, auto& outcome) {
       auto repo = Clone(job, request, std::get<File>(request.destination));
       outcome.repository = Repository(BindRepository(repo.get(), {}));
-    });
+    }, credentials_, {.operation = CredentialOperation::Clone});
     return GitResult<Transfer<CloneOutcome>>::Success(Transfer<CloneOutcome>(std::move(state)));
   } catch (const Failure& error) {
     return GitResult<Transfer<CloneOutcome>>::Failure(error.error);
@@ -888,10 +1011,11 @@ GitResult<Transfer<CloneOutcome>> GitService::StartClone(CloneRequest request) c
 GitResult<Transfer<FetchOutcome>> GitService::StartFetch(Repository repository, FetchRequest request) const {
   try {
     auto state = repository.state_;
+    const CredentialRequest auth{CredentialOperation::Fetch, state->location.git_directory, request.remote};
     auto job = Start<FetchOutcome>(state->group, [state, request = std::move(request)](auto& job, auto& outcome) {
       auto repo = Open(*state, true);
       Fetch(repo.get(), job, request, outcome);
-    });
+    }, credentials_, auth);
     return GitResult<Transfer<FetchOutcome>>::Success(Transfer<FetchOutcome>(std::move(job)));
   } catch (const Failure& error) {
     return GitResult<Transfer<FetchOutcome>>::Failure(error.error);
@@ -904,10 +1028,11 @@ GitResult<Transfer<PushOutcome>> GitService::StartPush(Repository repository, Pu
       Fail(ErrorCode::InvalidArgument, "Select one or more push destinations");
     }
     auto state = repository.state_;
+    const CredentialRequest auth{CredentialOperation::Push, state->location.git_directory, request.remote};
     auto job = Start<PushOutcome>(state->group, [state, request = std::move(request)](auto& job, auto& outcome) {
       auto repo = Open(*state, true);
       Push(repo.get(), job, request, outcome);
-    });
+    }, credentials_, auth);
     return GitResult<Transfer<PushOutcome>>::Success(Transfer<PushOutcome>(std::move(job)));
   } catch (const Failure& error) {
     return GitResult<Transfer<PushOutcome>>::Failure(error.error);
@@ -917,6 +1042,7 @@ GitResult<Transfer<PushOutcome>> GitService::StartPush(Repository repository, Pu
 GitResult<Transfer<PullOutcome>> GitService::StartPull(Repository repository, PullRequest request) const {
   try {
     auto state = repository.state_;
+    const CredentialRequest auth{CredentialOperation::Pull, state->location.git_directory, request.fetch.remote};
     auto job = Start<PullOutcome>(state->group, [state, request = std::move(request)](auto& job, auto& outcome) {
       auto repo = Open(*state, true);
       if (ReadHead(repo.get()) != request.expected) {
@@ -952,7 +1078,7 @@ GitResult<Transfer<PullOutcome>> GitService::StartPull(Repository repository, Pu
         integration.report = Failed(error.error);
         throw;
       }
-    });
+    }, credentials_, auth);
     return GitResult<Transfer<PullOutcome>>::Success(Transfer<PullOutcome>(std::move(job)));
   } catch (const Failure& error) {
     return GitResult<Transfer<PullOutcome>>::Failure(error.error);
